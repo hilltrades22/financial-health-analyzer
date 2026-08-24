@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Financial Health Analyzer</title>
+<link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap">
+      <h1>Financial Health Analyzer</h1>
+      <p class="tagline">Enter a ticker to understand the financial strength behind the company.</p>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="search-panel" aria-label="Search">
+      <form id="search-form" autocomplete="off">
+        <label for="ticker-input" class="sr-only">Ticker symbol</label>
+        <input id="ticker-input" name="ticker" type="text" placeholder="e.g. AAPL" maxlength="10" required>
+        <button type="submit" id="analyze-btn">Analyze Company</button>
+      </form>
+      <p id="search-hint" class="hint">Try AAPL, MSFT, NVDA, GOOGL, or AMZN.</p>
+    </section>
+
+    <section id="status-panel" class="status-panel" hidden></section>
+
+    <section id="results" class="results" hidden>
+      <div class="company-header">
+        <div>
+          <h2 id="company-name">-</h2>
+          <p id="company-ticker" class="ticker-badge">-</p>
+        </div>
+        <div class="score-box">
+          <div class="score-label">Overall Financial Health</div>
+          <div id="score-value" class="score-value">-- / 100</div>
+          <div id="score-badge" class="score-badge">-</div>
+        </div>
+      </div>
+
+      <div class="periods">
+        <span><strong>Latest Quarter:</strong> <span id="period-quarter">-</span></span>
+        <span><strong>Latest Annual:</strong> <span id="period-annual">-</span></span>
+      </div>
+
+      <div class="story-box">
+        <h3>Financial Story</h3>
+        <p id="financial-story">-</p>
+      </div>
+
+      <div id="rule-sections"></div>
+
+      <details class="data-sources">
+        <summary>Data Sources &amp; Calculation Details</summary>
+        <div id="data-sources-content"></div>
+      </details>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <p>Data sourced from SEC EDGAR (data.sec.gov). This tool provides educational information only and is not investment advice.</p>
+    </div>
+  </footer>
+
+<script src="/assets/app.js"></script>
+</body>
+</html>
