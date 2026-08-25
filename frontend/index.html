@@ -3,53 +3,81 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Financial Health Analyzer</title>
+<title>FORGE — Financial Intelligence</title>
 <link rel="stylesheet" href="/assets/styles.css">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/controls/OrbitControls.js"></script>
 </head>
 <body>
-  <header class="site-header">
-    <div class="wrap">
-      <h1>Financial Health Analyzer</h1>
-      <p class="tagline">Enter a ticker to understand the financial strength behind the company.</p>
+  <header class="topbar">
+    <div class="wrap topbar-inner">
+      <div class="brand" id="brand-home">
+        <span class="brand-mark">FORGE</span>
+        <span class="brand-sub">Financial Intelligence</span>
+      </div>
+      <button id="theme-toggle" class="theme-toggle" aria-label="Toggle dark mode" title="Toggle light/dark mode">
+        <span id="theme-icon">&#9789;</span>
+      </button>
     </div>
   </header>
 
   <main class="wrap">
-    <section class="search-panel" aria-label="Search">
-      <form id="search-form" autocomplete="off">
+    <section id="home-panel" class="home-panel">
+      <h1 class="home-title">FORGE</h1>
+      <p class="home-tagline">Understand the financial strength behind a company.</p>
+      <form id="search-form" autocomplete="off" class="search-form">
         <label for="ticker-input" class="sr-only">Ticker symbol</label>
-        <input id="ticker-input" name="ticker" type="text" placeholder="e.g. AAPL" maxlength="10" required>
+        <input id="ticker-input" type="text" placeholder="e.g. AAPL" maxlength="10" required>
         <button type="submit" id="analyze-btn">Analyze Company</button>
       </form>
-      <p id="search-hint" class="hint">Try AAPL, MSFT, NVDA, GOOGL, or AMZN.</p>
+      <p class="hint">Try AAPL, MSFT, NVDA, GOOGL, or AMZN.</p>
     </section>
 
-    <section id="status-panel" class="status-panel" hidden></section>
+    <section id="loading-panel" class="loading-panel" hidden>
+      <div class="loading-spinner" aria-hidden="true"></div>
+      <p id="loading-ticker" class="loading-ticker">Analyzing...</p>
+      <ul id="loading-steps" class="loading-steps"></ul>
+    </section>
+
+    <section id="error-panel" class="error-panel" hidden></section>
 
     <section id="results" class="results" hidden>
-      <div class="company-header">
-        <div>
-          <h2 id="company-name">-</h2>
-          <p id="company-ticker" class="ticker-badge">-</p>
+      <nav class="result-actions">
+        <button id="back-btn" class="link-btn">&larr; New Search</button>
+        <div class="result-actions-right">
+          <button id="print-btn" class="ghost-btn">Print / Save PDF</button>
         </div>
-        <div class="score-box">
-          <div class="score-label">Overall Financial Health</div>
-          <div id="score-value" class="score-value">-- / 100</div>
-          <div id="score-badge" class="score-badge">-</div>
-        </div>
-      </div>
+      </nav>
 
-      <div class="periods">
-        <span><strong>Latest Quarter:</strong> <span id="period-quarter">-</span></span>
-        <span><strong>Latest Annual:</strong> <span id="period-annual">-</span></span>
-      </div>
+      <!-- 1. Company Dashboard -->
+      <section class="card dashboard-card" id="dashboard-card"></section>
 
-      <div class="story-box">
-        <h3>Financial Story</h3>
-        <p id="financial-story">-</p>
-      </div>
+      <!-- Financial Story -->
+      <section class="card story-card">
+        <h2>Financial Story</h2>
+        <p id="financial-story"></p>
+        <p id="trend-story" class="trend-story"></p>
+      </section>
 
-      <div id="rule-sections"></div>
+      <!-- Section tabs -->
+      <nav class="tabs" id="section-tabs">
+        <button class="tab-btn active" data-tab="health">Financial Health</button>
+        <button class="tab-btn" data-tab="quality">Financial Quality</button>
+        <button class="tab-btn" data-tab="valuation">Valuation</button>
+        <button class="tab-btn" data-tab="risk">Risk Center</button>
+        <button class="tab-btn" data-tab="timeline">Timeline</button>
+        <button class="tab-btn" data-tab="model3d">3D Model</button>
+        <button class="tab-btn" data-tab="compare">Compare</button>
+      </nav>
+
+      <section class="tab-panel active" id="tab-health"></section>
+      <section class="tab-panel" id="tab-quality"></section>
+      <section class="tab-panel" id="tab-valuation"></section>
+      <section class="tab-panel" id="tab-risk"></section>
+      <section class="tab-panel" id="tab-timeline"></section>
+      <section class="tab-panel" id="tab-model3d"></section>
+      <section class="tab-panel" id="tab-compare"></section>
 
       <details class="data-sources">
         <summary>Data Sources &amp; Calculation Details</summary>
@@ -60,7 +88,7 @@
 
   <footer class="site-footer">
     <div class="wrap">
-      <p>Data sourced from SEC EDGAR (data.sec.gov). This tool provides educational information only and is not investment advice.</p>
+      <p>Fundamentals from SEC EDGAR (data.sec.gov). Live price/valuation from Stooq.com, shown separately. Educational information only — not investment advice.</p>
     </div>
   </footer>
 
