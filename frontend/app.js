@@ -35,6 +35,21 @@
     Chart.defaults.font.family = "Segoe UI, -apple-system, sans-serif";
   }
 
+  // Chart.js throws "Canvas is already in use" if a new Chart is created on a
+  // canvas that still has a live instance attached (e.g. clicking a
+  // timeframe/metric control that redraws in place without re-rendering the
+  // whole tab). This was the root cause of controls appearing to do nothing
+  // after the first redraw - destroy any existing instance on that canvas
+  // first, via Chart.js's own registry, so every control genuinely redraws.
+  function getOrCreateChart(canvas, config) {
+    if (!canvas) return null;
+    const existing = window.Chart && Chart.getChart ? Chart.getChart(canvas) : null;
+    if (existing) existing.destroy();
+    const chart = new Chart(canvas, config);
+    window.__forgeCharts.push(chart);
+    return chart;
+  }
+
   // ---------- Elements ----------
   const homePanel = document.getElementById("home-panel");
   const loadingPanel = document.getElementById("loading-panel");
@@ -248,7 +263,7 @@
     const clamped = Math.max(0, Math.min(100, pct === null ? 0 : pct));
     const color = colorFn(pct);
     const colors = chartColors();
-    const chart = new Chart(c, {
+    const chart = getOrCreateChart(c, {
       type: "doughnut",
       data: { datasets: [{ data: [clamped, 100 - clamped], backgroundColor: [color, colors.border], borderWidth: 0 }] },
       options: {
@@ -257,7 +272,6 @@
         animation: { duration: 400 },
       },
     });
-    window.__forgeCharts.push(chart);
   }
 
   function renderHealthTab(data) {
@@ -316,7 +330,7 @@
         (qf.short_term_investments.available ? qf.short_term_investments.value : 0) +
         (qf.long_term_investments.available ? qf.long_term_investments.value : 0);
       const debt = (qf.short_term_debt.available ? qf.short_term_debt.value : 0) + (qf.long_term_debt.available ? qf.long_term_debt.value : 0);
-      const chart = new Chart(cashDebtEl, {
+      const chart = getOrCreateChart(cashDebtEl, {
         type: "bar",
         data: {
           labels: ["Cash + Securities", "Total Debt"],
@@ -330,12 +344,11 @@
           },
         },
       });
-      window.__forgeCharts.push(chart);
     }
 
     const leaseEl = document.getElementById("chart-lease");
     if (leaseEl && window.Chart && leaseSummary.available) {
-      const chart = new Chart(leaseEl, {
+      const chart = getOrCreateChart(leaseEl, {
         type: "doughnut",
         data: {
           labels: ["Current Lease Liabilities", "Long-Term Lease Liabilities"],
@@ -343,7 +356,6 @@
         },
         options: { plugins: { legend: { position: "bottom", labels: { color: colors.text } } } },
       });
-      window.__forgeCharts.push(chart);
     }
   }
 
@@ -389,7 +401,7 @@
     const labels = timeline.map((t) => "FY" + (t.fiscal_year || t.period_end));
     const trendEl = document.getElementById("chart-quality-trend");
     if (trendEl && window.Chart) {
-      const chart = new Chart(trendEl, {
+      const chart = getOrCreateChart(trendEl, {
         type: "bar",
         data: {
           labels,
@@ -406,11 +418,10 @@
           },
         },
       });
-      window.__forgeCharts.push(chart);
     }
     const fcfEl = document.getElementById("chart-fcf-trend");
     if (fcfEl && window.Chart) {
-      const chart = new Chart(fcfEl, {
+      const chart = getOrCreateChart(fcfEl, {
         type: "line",
         data: { labels, datasets: [{ label: "Free Cash Flow", data: timeline.map((t) => t.free_cash_flow), borderColor: colors.accent, backgroundColor: colors.accent + "33", fill: true, tension: 0.3 }] },
         options: {
@@ -421,7 +432,6 @@
           },
         },
       });
-      window.__forgeCharts.push(chart);
     }
   }
 
@@ -461,7 +471,7 @@
       if (v.pb_ratio && v.pb_ratio.available) { labels.push("P/B"); values.push(v.pb_ratio.value); }
       if (v.ps_ratio && v.ps_ratio.available) { labels.push("P/S"); values.push(v.ps_ratio.value); }
       if (v.ev_ebitda && v.ev_ebitda.available) { labels.push("EV/EBITDA"); values.push(v.ev_ebitda.value); }
-      const chart = new Chart(document.getElementById("chart-valuation-bars"), {
+      const chart = getOrCreateChart(document.getElementById("chart-valuation-bars"), {
         type: "bar",
         data: { labels, datasets: [{ data: values, backgroundColor: colors.brand, borderRadius: 6 }] },
         options: {
@@ -470,7 +480,6 @@
           scales: { x: { ticks: { color: colors.muted }, grid: { color: colors.border } }, y: { ticks: { color: colors.text }, grid: { display: false } } },
         },
       });
-      window.__forgeCharts.push(chart);
     }
   }
 
@@ -764,7 +773,7 @@
     const datasets = TIMELINE_METRICS.filter((m) => timelineActive.has(m.key)).map((m) => ({
       label: m.label, data: timeline.map((t) => t[m.key]), borderColor: colorMap[m.color], backgroundColor: colorMap[m.color], tension: 0.3, fill: false,
     }));
-    const chart = new Chart(el, {
+    const chart = getOrCreateChart(el, {
       type: "line",
       data: { labels, datasets },
       options: {
@@ -772,14 +781,13 @@
         scales: { y: { ticks: { color: colors.muted, callback: (v) => fmtUsd(v) }, grid: { color: colors.border } }, x: { ticks: { color: colors.text }, grid: { display: false } } },
       },
     });
-    window.__forgeCharts.push(chart);
   }
 
   function drawScoreHistoryChart(history) {
     const el = document.getElementById("chart-score-history");
     if (!el || !window.Chart || !history || !history.length) return;
     const colors = chartColors();
-    const chart = new Chart(el, {
+    const chart = getOrCreateChart(el, {
       type: "line",
       data: {
         labels: history.map((h) => "FY" + h.fiscal_year),
@@ -790,7 +798,6 @@
         scales: { y: { min: 0, max: 100, ticks: { color: colors.muted }, grid: { color: colors.border } }, x: { ticks: { color: colors.text }, grid: { display: false } } },
       },
     });
-    window.__forgeCharts.push(chart);
   }
 
   // ---------- 3D Model ----------
@@ -1025,7 +1032,7 @@
     if (window.Chart) {
       const colors = chartColors();
       const palette = [colors.brand, colors.pass, colors.watch, colors.fail, cssVar("--accent")];
-      const chart = new Chart(document.getElementById("chart-compare-radar"), {
+      const chart = getOrCreateChart(document.getElementById("chart-compare-radar"), {
         type: "radar",
         data: {
           labels: ["Financial Health", "Financial Quality", "Valuation", "Risk"],
@@ -1040,7 +1047,6 @@
           scales: { r: { min: 0, max: 100, ticks: { color: colors.muted, backdropColor: "transparent" }, grid: { color: colors.border }, angleLines: { color: colors.border }, pointLabels: { color: colors.text } } },
         },
       });
-      window.__forgeCharts.push(chart);
     }
   }
 
