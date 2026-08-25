@@ -858,6 +858,9 @@
         document.querySelectorAll(".tab-panel").forEach((p) => p.classList.remove("active"));
         btn.classList.add("active");
         document.getElementById("tab-" + btn.dataset.tab).classList.add("active");
+        if (btn.dataset.tab === "model3d") {
+          window.dispatchEvent(new Event("resize"));
+        }
       };
     });
   }
