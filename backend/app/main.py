@@ -12,8 +12,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from .grading import build_grading
 from .history import build_financial_timeline, build_historical_scores, explain_score_trend
-from .market_data import compute_valuation, fetch_stock_price
+from .market_data import compute_valuation, fetch_forward_pe, fetch_price_history, fetch_stock_price
 from .normalize import build_company_financials
 from .pillars import compute_forge_score
 from .quality import compute_financial_quality, compute_piotroski_f_score
@@ -96,19 +97,22 @@ async def _analyze_ticker(ticker_key: str) -> dict[str, Any]:
     timeline = build_financial_timeline(company_facts)
 
     # Live market price is best-effort and clearly separated from SEC data.
-    price_info = await fetch_stock_price(ticker_key)
+    price_info, forward_pe = await asyncio.gather(
+        fetch_stock_price(ticker_key), fetch_forward_pe(ticker_key)
+    )
     total_debt = None
     cash_val = None
     if cf.quarterly.short_term_debt.available or cf.quarterly.long_term_debt.available:
         total_debt = (cf.quarterly.short_term_debt.value or 0) + (cf.quarterly.long_term_debt.value or 0)
     if cf.quarterly.cash_and_equivalents.available:
         cash_val = cf.quarterly.cash_and_equivalents.value
-    valuation = compute_valuation(company_facts, price_info, total_debt, cash_val)
+    valuation = compute_valuation(company_facts, price_info, total_debt, cash_val, forward_pe)
 
     market_cap_val = valuation.get("market_cap", {}).get("value") if valuation.get("market_cap", {}).get("available") else None
     altman = compute_altman_z_score(company_facts, market_cap_val)
 
     forge = compute_forge_score(score["overall_score"], piotroski, altman, valuation)
+    grading = build_grading(forge, score, piotroski, valuation, altman)
 
     lease_current = (cf.quarterly.operating_lease_current.value or 0) if cf.quarterly.operating_lease_current.available else 0
     lease_current += (cf.quarterly.finance_lease_current.value or 0) if cf.quarterly.finance_lease_current.available else 0
@@ -140,6 +144,7 @@ async def _analyze_ticker(ticker_key: str) -> dict[str, Any]:
             "filed": cf.annual.filed,
         },
         "forge": forge,
+        "grading": grading,
         "score": score,
         "financial_story": story,
         "quality_metrics": quality_metrics,
@@ -184,7 +189,7 @@ async def _analyze_ticker(ticker_key: str) -> dict[str, Any]:
             "treasury_stock": _fact_to_dict(cf.annual.treasury_stock),
         },
         "data_source": "SEC EDGAR (data.sec.gov) - XBRL Company Facts, Submissions, and ticker/CIK mapping. No demo or fabricated data.",
-        "market_data_source": "Stooq.com delayed market quote, used only for live price / market cap / valuation multiples - clearly separate from SEC data.",
+        "market_data_source": "Yahoo Finance (query1.finance.yahoo.com), with Stooq.com as a fallback - used only for live price / market cap / valuation multiples / price history, clearly separate from SEC data.",
     }
 
     _cache[ticker_key] = (now, result)
@@ -194,6 +199,12 @@ async def _analyze_ticker(ticker_key: str) -> dict[str, Any]:
 @app.get("/api/analyze/{ticker}")
 async def analyze(ticker: str) -> JSONResponse:
     result = await _analyze_ticker(ticker.strip().upper())
+    return JSONResponse(result)
+
+
+@app.get("/api/price-history/{ticker}")
+async def price_history(ticker: str, range: str = "1Y") -> JSONResponse:
+    result = await fetch_price_history(ticker.strip().upper(), range)
     return JSONResponse(result)
 
 
