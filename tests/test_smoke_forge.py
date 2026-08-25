@@ -53,13 +53,54 @@ FAKE_FACTS = {
 }
 
 
+FAKE_YAHOO_CHART_5D = {
+    "chart": {"result": [{
+        "meta": {"regularMarketPrice": 224.5, "regularMarketTime": 1755720000,
+                  "chartPreviousClose": 222.0, "currency": "USD", "fullExchangeName": "NASDAQ"},
+        "timestamp": [], "indicators": {"quote": [{}]},
+    }]}
+}
+
+FAKE_YAHOO_CHART_HISTORY = {
+    "chart": {"result": [{
+        "meta": {"regularMarketPrice": 224.5},
+        "timestamp": [1750000000, 1750086400, 1750172800],
+        "indicators": {"quote": [{
+            "open": [210.0, 212.0, 215.0], "high": [213.0, 214.0, 218.0],
+            "low": [208.0, 211.0, 214.0], "close": [212.0, 213.5, 217.0],
+            "volume": [1000000, 1200000, 900000],
+        }]},
+    }]}
+}
+
+FAKE_YAHOO_KEY_STATS = {
+    "quoteSummary": {"result": [{"defaultKeyStatistics": {"forwardPE": {"raw": 27.4}}}]}
+}
+
+
+def _mock_market_data():
+    respx.get(url__regex=r"https://query1\.finance\.yahoo\.com/v8/finance/chart/AAPL(\?.*)?$").mock(
+        side_effect=lambda request: httpx.Response(
+            200,
+            json=FAKE_YAHOO_CHART_HISTORY if "range=1y" in str(request.url) or "range=3mo" in str(request.url)
+            or "range=6mo" in str(request.url) or "ytd" in str(request.url) or "3y" in str(request.url)
+            or "5y" in str(request.url) or "10y" in str(request.url) or "max" in str(request.url)
+            else FAKE_YAHOO_CHART_5D,
+        )
+    )
+    respx.get(url__regex=r"https://query1\.finance\.yahoo\.com/v10/finance/quoteSummary/AAPL.*").mock(
+        return_value=httpx.Response(200, json=FAKE_YAHOO_KEY_STATS)
+    )
+    respx.get(url__regex=r"https://stooq\.com/.*").mock(return_value=httpx.Response(200, text="Symbol,Date,Time,Open,High,Low,Close,Volume\naapl.us,2026-08-21,16:00:00,220,225,219,224.5,5000000\n"))
+
+
 @pytest.mark.asyncio
 @respx.mock
 async def test_full_forge_payload_smoke():
     respx.get("https://www.sec.gov/files/company_tickers.json").mock(return_value=httpx.Response(200, json=TICKER_MAP))
     respx.get("https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json").mock(return_value=httpx.Response(200, json=FAKE_FACTS))
     respx.get("https://data.sec.gov/submissions/CIK0000320193.json").mock(return_value=httpx.Response(200, json={"sicDescription": "Electronic Computers", "sic": "3571"}))
-    respx.get(url__regex=r"https://stooq\.com/.*").mock(return_value=httpx.Response(200, text="Symbol,Date,Time,Open,High,Low,Close,Volume\naapl.us,2026-08-21,16:00:00,220,225,219,224.5,5000000\n"))
+    _mock_market_data()
 
     async with httpx.AsyncClient(app=app, base_url="http://test") as client:
         resp = await client.get("/api/analyze/AAPL")
@@ -71,10 +112,43 @@ async def test_full_forge_payload_smoke():
     assert data["altman"]["available"] is True
     assert data["valuation"]["market_cap"]["available"] is True
     assert data["valuation"]["pe_ratio"]["available"] is True
+    assert data["valuation"]["forward_pe_ratio"]["available"] is True
+    assert data["valuation"]["price_source_short"] == "Yahoo Finance"
     assert len(data["timeline"]) >= 1
     assert data["industry"] == "Electronic Computers"
+
+    # Grading system
+    grading = data["grading"]
+    assert grading["letter_grade"] in {"A+", "A", "A-", "B+", "B", "B-", "C+", "C", "C-", "D+", "D", "D-", "F"}
+    assert grading["health_classification"] in {"Exceptional", "Strong", "Healthy", "Watch", "Weak", "Critical"}
+    for key in ("financial_health", "financial_quality", "valuation", "risk"):
+        p = grading["pillars"][key]
+        assert "letter_grade" in p and "contribution_pct" in p and "key_reasons" in p
 
     async with httpx.AsyncClient(app=app, base_url="http://test") as client:
         resp2 = await client.get("/api/compare?tickers=AAPL")
     assert resp2.status_code == 200
     assert len(resp2.json()["companies"]) == 1
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_price_history_ranges():
+    _mock_market_data()
+    async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+        for rng in ["3M", "6M", "YTD", "1Y", "3Y", "5Y", "10Y", "MAX"]:
+            resp = await client.get(f"/api/price-history/AAPL?range={rng}")
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["available"] is True, f"range {rng} should be available: {body}"
+            assert len(body["points"]) == 3
+            assert body["points"][0]["close"] == 212.0
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_price_history_unknown_range():
+    async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+        resp = await client.get("/api/price-history/AAPL?range=BOGUS")
+    assert resp.status_code == 200
+    assert resp.json()["available"] is False
