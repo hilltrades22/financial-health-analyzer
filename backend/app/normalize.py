@@ -287,6 +287,13 @@ def build_annual_snapshot(company_facts: dict[str, Any]) -> AnnualSnapshot:
     return ann
 
 
+# --- Public re-exports for other modules (quality/risk/history/market_data) ---
+latest_instant = _latest_instant
+annual_series = _annual_series
+fact_from_entry = _fact_from_entry
+QUARTERLY_FORMS = QUARTERLY_ELIGIBLE_FORMS
+
+
 def build_company_financials(ticker: str, cik: int, name: str, company_facts: dict[str, Any]) -> CompanyFinancials:
     return CompanyFinancials(
         ticker=ticker,
