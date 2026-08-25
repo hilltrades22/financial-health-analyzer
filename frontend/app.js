@@ -436,12 +436,19 @@
   }
 
   // ---------- Valuation tab ----------
+  let valuationHistoryMetric = "pe";
+  const VALUATION_METRIC_LABELS = { pe: "P/E", pb: "P/B", ps: "P/S", ev_ebitda: "EV/EBITDA" };
+
   function renderValuationTab(data) {
     const el = document.getElementById("tab-valuation");
     const v = data.valuation;
+    const vh = data.valuation_history || { available: false };
+    const bbb = data.bull_base_bear || { available: false };
     const unavailable = { available: false, display: NA };
     const rows = [
+      ["Current Price", v.price ? { available: true, display: "$" + Number(v.price.value).toFixed(2) } : unavailable],
       ["Market Cap", v.market_cap || unavailable], ["Shares Outstanding", v.shares_outstanding ? { available: true, display: Number(v.shares_outstanding.value).toLocaleString() } : unavailable],
+      ["EPS (TTM)", v.eps || unavailable], ["Dividend Yield", v.dividend_yield || unavailable],
       ["P/E Ratio", v.pe_ratio || unavailable], ["Forward P/E", v.forward_pe_ratio || unavailable],
       ["P/B Ratio", v.pb_ratio || unavailable], ["P/S Ratio", v.ps_ratio || unavailable],
       ["Enterprise Value", v.enterprise_value || unavailable], ["EV / EBITDA", v.ev_ebitda || unavailable], ["EV / Sales", v.ev_sales || unavailable],
@@ -453,8 +460,45 @@
 
     let barsHtml = "";
     if (v.pe_ratio && v.pe_ratio.available) {
-      barsHtml = `<div class="chart-box"><h3>Valuation Multiples</h3>
+      barsHtml = `<div class="chart-box"><h3>Current Valuation Multiples</h3>
         <div class="chart-canvas-wrap short"><canvas id="chart-valuation-bars"></canvas></div></div>`;
+    }
+
+    let historyHtml = "";
+    if (vh.available) {
+      const metricOptions = Object.keys(VALUATION_METRIC_LABELS).filter((k) => vh[k] && vh[k].available);
+      historyHtml = `<div class="chart-box">
+        <h3>Historical Valuation</h3>
+        <p class="chart-sub">${esc(vh.note || "")} (${vh.years_of_data} fiscal years of real data)</p>
+        <div class="chart-controls">
+          <div class="control-group">
+            <label>Metric</label>
+            <select class="chart-type-select" id="valuation-metric-select">
+              ${metricOptions.map((k) => `<option value="${k}"${k === valuationHistoryMetric ? " selected" : ""}>${VALUATION_METRIC_LABELS[k]}</option>`).join("")}
+            </select>
+          </div>
+        </div>
+        <div class="chart-canvas-wrap short"><canvas id="chart-valuation-history"></canvas></div>
+        <div class="metric-grid" id="valuation-history-stats"></div>
+      </div>`;
+    } else {
+      historyHtml = `<div class="chart-box"><h3>Historical Valuation</h3><p style="color:var(--muted)">Data unavailable — ${esc(vh.reason || "insufficient historical price/fundamental overlap")}.</p></div>`;
+    }
+
+    let bbbHtml = "";
+    if (bbb.available) {
+      bbbHtml = `<div class="chart-box">
+        <h3>Bull / Base / Bear Valuation</h3>
+        <p class="chart-sub">${esc(bbb.methodology)}</p>
+        <div class="metric-grid">
+          <div class="kpi-card"><div class="kpi-label">Bear</div><div class="kpi-value">$${bbb.bear.price_target}</div><div class="kpi-formula">${esc(bbb.bear.assumption)}</div></div>
+          <div class="kpi-card"><div class="kpi-label">Base</div><div class="kpi-value">$${bbb.base.price_target}</div><div class="kpi-formula">${esc(bbb.base.assumption)}</div></div>
+          <div class="kpi-card"><div class="kpi-label">Bull</div><div class="kpi-value">$${bbb.bull.price_target}</div><div class="kpi-formula">${esc(bbb.bull.assumption)}</div></div>
+          <div class="kpi-card"><div class="kpi-label">Current Price</div><div class="kpi-value">$${bbb.current_price}</div></div>
+        </div>
+      </div>`;
+    } else {
+      bbbHtml = `<div class="chart-box"><h3>Bull / Base / Bear Valuation</h3><p style="color:var(--muted)">Data unavailable — ${esc(bbb.reason || "requires current EPS and a historical P/E series")}.</p></div>`;
     }
 
     el.innerHTML = `
@@ -462,6 +506,8 @@
       <div class="metric-grid">${kpiHtml}</div>
       ${sourceLine}
       ${barsHtml}
+      ${historyHtml}
+      ${bbbHtml}
     `;
 
     if (v.pe_ratio && v.pe_ratio.available && window.Chart) {
@@ -471,7 +517,7 @@
       if (v.pb_ratio && v.pb_ratio.available) { labels.push("P/B"); values.push(v.pb_ratio.value); }
       if (v.ps_ratio && v.ps_ratio.available) { labels.push("P/S"); values.push(v.ps_ratio.value); }
       if (v.ev_ebitda && v.ev_ebitda.available) { labels.push("EV/EBITDA"); values.push(v.ev_ebitda.value); }
-      const chart = getOrCreateChart(document.getElementById("chart-valuation-bars"), {
+      getOrCreateChart(document.getElementById("chart-valuation-bars"), {
         type: "bar",
         data: { labels, datasets: [{ data: values, backgroundColor: colors.brand, borderRadius: 6 }] },
         options: {
@@ -480,6 +526,55 @@
           scales: { x: { ticks: { color: colors.muted }, grid: { color: colors.border } }, y: { ticks: { color: colors.text }, grid: { display: false } } },
         },
       });
+    }
+
+    if (vh.available) {
+      const select = document.getElementById("valuation-metric-select");
+      if (select) {
+        select.addEventListener("change", (e) => {
+          valuationHistoryMetric = e.target.value;
+          drawValuationHistoryChart(vh);
+        });
+      }
+      drawValuationHistoryChart(vh);
+    }
+  }
+
+  function drawValuationHistoryChart(vh) {
+    const canvas = document.getElementById("chart-valuation-history");
+    const statsEl = document.getElementById("valuation-history-stats");
+    if (!canvas || !window.Chart) return;
+    const metric = vh[valuationHistoryMetric] && vh[valuationHistoryMetric].available ? valuationHistoryMetric : Object.keys(VALUATION_METRIC_LABELS).find((k) => vh[k] && vh[k].available);
+    if (!metric) return;
+    const rows = vh.series.filter((r) => metric in r).slice().reverse();
+    const labels = rows.map((r) => r.period_end);
+    const values = rows.map((r) => r[metric]);
+    const stats = vh[metric];
+    const colors = chartColors();
+    getOrCreateChart(canvas, {
+      type: "line",
+      data: {
+        labels,
+        datasets: [
+          { label: VALUATION_METRIC_LABELS[metric] + " (actual, per fiscal year)", data: values, borderColor: colors.brand, backgroundColor: colors.brand, tension: 0.25, pointRadius: 4 },
+          ...(stats.avg_5y ? [{ label: "5Y Average", data: labels.map(() => stats.avg_5y), borderColor: colors.watch, borderDash: [6, 4], pointRadius: 0 }] : []),
+          ...(stats.avg_10y ? [{ label: "10Y Average", data: labels.map(() => stats.avg_10y), borderColor: colors.muted, borderDash: [2, 3], pointRadius: 0 }] : []),
+        ],
+      },
+      options: {
+        plugins: { legend: { labels: { color: colors.text } } },
+        scales: { x: { ticks: { color: colors.muted }, grid: { color: colors.border } }, y: { ticks: { color: colors.muted }, grid: { color: colors.border } } },
+      },
+    });
+    if (statsEl) {
+      const premium5 = stats.premium_discount_vs_5y_pct;
+      const premium10 = stats.premium_discount_vs_10y_pct;
+      statsEl.innerHTML = `
+        <div class="kpi-card"><div class="kpi-label">Current ${VALUATION_METRIC_LABELS[metric]}</div><div class="kpi-value">${stats.current}x</div></div>
+        <div class="kpi-card"><div class="kpi-label">5Y Average</div><div class="kpi-value">${stats.avg_5y ?? NA}x</div></div>
+        <div class="kpi-card"><div class="kpi-label">10Y Average</div><div class="kpi-value">${stats.avg_10y ?? NA}x</div></div>
+        <div class="kpi-card"><div class="kpi-label">vs 5Y Avg</div><div class="kpi-value">${premium5 != null ? (premium5 > 0 ? "+" : "") + premium5 + "%" : NA}</div><div class="kpi-formula">${premium5 != null ? (premium5 > 0 ? "Premium" : "Discount") + " to historical average" : ""}</div></div>
+      `;
     }
   }
 
