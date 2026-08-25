@@ -157,11 +157,16 @@ def _latest_instant(company_facts: dict[str, Any], tags: Iterable[str], forms: s
 
 
 def _annual_series(company_facts: dict[str, Any], tags: Iterable[str], duration: bool) -> list[dict[str, Any]]:
-    """All annual (10-K) datapoints for the first tag with usable data, sorted by
-    period end descending, deduplicated by fiscal year (keeping latest filed)."""
+    """All annual (10-K) datapoints across every candidate tag, merged by
+    fiscal year end and sorted descending. Filers often rename a concept
+    partway through their filing history (e.g. Apple's "Revenues" through
+    FY2018, then "RevenueFromContractWithCustomerExcludingAssessedTax" from
+    FY2019 on) - merging across tags instead of stopping at the first tag
+    with ANY data is what keeps the "latest" datapoint from silently being a
+    stale one under an abandoned tag while a newer tag has current data."""
+    by_end: dict[str, dict[str, Any]] = {}
     for tag in tags:
         entries = _units_for(company_facts, tag)
-        candidates = []
         for e in entries:
             if e.get("form") not in ANNUAL_FORMS:
                 continue
@@ -178,20 +183,18 @@ def _annual_series(company_facts: dict[str, Any], tags: Iterable[str], duration:
             else:
                 if "start" in e:
                     continue
-            candidates.append(e)
-        if not candidates:
-            continue
-        # Dedup by fiscal year end date, keeping the latest-filed value.
-        by_end: dict[str, dict[str, Any]] = {}
-        for e in candidates:
             key = e.get("end")
             prev = by_end.get(key)
+            # Prefer whichever tag/filing gives this fiscal year end the most
+            # recently-filed value - lets a newer tag "win" a year that an
+            # older, superseded tag also happens to cover.
             if prev is None or (e.get("filed") or "") > (prev.get("filed") or ""):
                 by_end[key] = e
-        out = list(by_end.values())
-        out.sort(key=lambda e: _parse_date(e.get("end")) or date.min, reverse=True)
-        return out
-    return []
+    if not by_end:
+        return []
+    out = list(by_end.values())
+    out.sort(key=lambda e: _parse_date(e.get("end")) or date.min, reverse=True)
+    return out
 
 
 def _fact_from_entry(entry: Optional[dict[str, Any]]) -> FactValue:
