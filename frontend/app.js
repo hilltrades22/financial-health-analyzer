@@ -404,9 +404,10 @@
   function renderValuationTab(data) {
     const el = document.getElementById("tab-valuation");
     const v = data.valuation;
+    const unavailable = { available: false, display: NA };
     const rows = [
-      ["Market Cap", v.market_cap], ["P/E Ratio", v.pe_ratio], ["P/B Ratio", v.pb_ratio], ["P/S Ratio", v.ps_ratio],
-      ["Enterprise Value", v.enterprise_value], ["EV / EBITDA", v.ev_ebitda], ["EV / Sales", v.ev_sales],
+      ["Market Cap", v.market_cap || unavailable], ["P/E Ratio", v.pe_ratio || unavailable], ["P/B Ratio", v.pb_ratio || unavailable], ["P/S Ratio", v.ps_ratio || unavailable],
+      ["Enterprise Value", v.enterprise_value || unavailable], ["EV / EBITDA", v.ev_ebitda || unavailable], ["EV / Sales", v.ev_sales || unavailable],
     ];
     const kpiHtml = rows.map(([label, m]) => `<div class="kpi-card"><div class="kpi-label">${label}</div><div class="kpi-value">${esc(m.display)}</div></div>`).join("");
 
@@ -612,7 +613,9 @@
       ["Piotroski F-Score", `${d.piotroski.score} / ${d.piotroski.scored_out_of}`],
     ]},
     { key: "valuation", label: "Valuation", metrics: (d) => [
-      ["P/E", d.valuation.pe_ratio.display], ["P/B", d.valuation.pb_ratio.display], ["EV/EBITDA", d.valuation.ev_ebitda.display],
+      ["P/E", (d.valuation.pe_ratio && d.valuation.pe_ratio.display) || NA],
+      ["P/B", (d.valuation.pb_ratio && d.valuation.pb_ratio.display) || NA],
+      ["EV/EBITDA", (d.valuation.ev_ebitda && d.valuation.ev_ebitda.display) || NA],
     ]},
   ];
 
@@ -796,9 +799,9 @@
       ["Financial Quality", (c) => (c.forge.pillars.financial_quality.score === null ? "N/A" : Math.round(c.forge.pillars.financial_quality.score))],
       ["Valuation", (c) => (c.forge.pillars.valuation.score === null ? "N/A" : Math.round(c.forge.pillars.valuation.score))],
       ["Risk", (c) => (c.forge.pillars.risk.score === null ? "N/A" : Math.round(c.forge.pillars.risk.score))],
-      ["P/E", (c) => c.valuation.pe_ratio.display],
-      ["P/B", (c) => c.valuation.pb_ratio.display],
-      ["P/S", (c) => c.valuation.ps_ratio.display],
+      ["P/E", (c) => (c.valuation.pe_ratio && c.valuation.pe_ratio.display) || NA],
+      ["P/B", (c) => (c.valuation.pb_ratio && c.valuation.pb_ratio.display) || NA],
+      ["P/S", (c) => (c.valuation.ps_ratio && c.valuation.ps_ratio.display) || NA],
       ["ROE", (c) => c.quality_metrics.roe.display],
       ["FCF Margin", (c) => c.quality_metrics.fcf_margin.display],
       ["Debt/Equity", (c) => (c.score.rules.find((r) => r.id === "debt_to_equity") || {}).value || NA],
