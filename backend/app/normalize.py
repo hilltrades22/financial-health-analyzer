@@ -80,20 +80,52 @@ def _parse_date(s: Optional[str]) -> Optional[date]:
         return None
 
 
-def _units_for(company_facts: dict[str, Any], tag: str) -> list[dict[str, Any]]:
-    us_gaap = company_facts.get("facts", {}).get("us-gaap", {})
-    concept = us_gaap.get(tag)
+def _units_for(company_facts: dict[str, Any], tag: str, namespace: str = "us-gaap") -> list[dict[str, Any]]:
+    ns_facts = company_facts.get("facts", {}).get(namespace, {})
+    concept = ns_facts.get(tag)
     if not concept:
         return []
     units = concept.get("units", {})
-    # USD is the overwhelmingly common unit for these concepts.
-    entries = units.get("USD", [])
+    # USD is the overwhelmingly common unit for dollar concepts; share-count
+    # concepts (e.g. CommonStockSharesOutstanding) are tagged in "shares"
+    # instead - checking both here means the same lookup helpers work for
+    # both without every caller needing to know which unit applies.
+    entries = units.get("USD") or units.get("shares") or []
     out = []
     for e in entries:
         e = dict(e)
         e["_concept"] = tag
         out.append(e)
     return out
+
+
+def latest_shares_outstanding(company_facts: dict[str, Any]) -> FactValue:
+    """Most recent shares-outstanding figure from SEC XBRL, checking the
+    us-gaap balance-sheet concept first (any 10-K/10-Q), then falling back
+    to the dei cover-page concept every filer must report. Never fabricated -
+    returns FactValue.missing() if neither is present."""
+    for tag in ("CommonStockSharesOutstanding", "CommonStockSharesIssued"):
+        entries = _units_for(company_facts, tag, namespace="us-gaap")
+        candidates = [e for e in entries if e.get("form") in QUARTERLY_ELIGIBLE_FORMS and e.get("end") and "start" not in e]
+        if candidates:
+            candidates.sort(key=lambda e: (_parse_date(e.get("end")) or date.min, e.get("filed") or ""), reverse=True)
+            best = candidates[0]
+            return FactValue(
+                value=float(best["val"]), available=True, period_end=best.get("end"),
+                fiscal_year=best.get("fy"), fiscal_period=best.get("fp"), form=best.get("form"),
+                concept=f"us-gaap:{tag}", filed=best.get("filed"), accn=best.get("accn"),
+            )
+    dei_entries = _units_for(company_facts, "EntityCommonStockSharesOutstanding", namespace="dei")
+    candidates = [e for e in dei_entries if e.get("end")]
+    if candidates:
+        candidates.sort(key=lambda e: (_parse_date(e.get("end")) or date.min, e.get("filed") or ""), reverse=True)
+        best = candidates[0]
+        return FactValue(
+            value=float(best["val"]), available=True, period_end=best.get("end"),
+            fiscal_year=best.get("fy"), fiscal_period=best.get("fp"), form=best.get("form"),
+            concept="dei:EntityCommonStockSharesOutstanding", filed=best.get("filed"), accn=best.get("accn"),
+        )
+    return FactValue.missing()
 
 
 def _latest_instant(company_facts: dict[str, Any], tags: Iterable[str], forms: set[str]) -> FactValue:
@@ -285,6 +317,27 @@ def build_annual_snapshot(company_facts: dict[str, Any]) -> AnnualSnapshot:
                 break
 
     return ann
+
+
+def annual_shares_outstanding_series(company_facts: dict[str, Any]) -> list[FactValue]:
+    """Shares outstanding at each fiscal year end (10-K only), most recent
+    first - used to compute real historical market cap / valuation
+    multiples rather than applying today's share count to past years."""
+    for tag in ("CommonStockSharesOutstanding", "CommonStockSharesIssued"):
+        entries = _units_for(company_facts, tag, namespace="us-gaap")
+        candidates = [e for e in entries if e.get("form") in ANNUAL_FORMS and e.get("end") and "start" not in e]
+        if not candidates:
+            continue
+        by_end: dict[str, dict[str, Any]] = {}
+        for e in candidates:
+            key = e.get("end")
+            prev = by_end.get(key)
+            if prev is None or (e.get("filed") or "") > (prev.get("filed") or ""):
+                by_end[key] = e
+        out = list(by_end.values())
+        out.sort(key=lambda e: _parse_date(e.get("end")) or date.min, reverse=True)
+        return [_fact_from_entry(e) for e in out]
+    return []
 
 
 # --- Public re-exports for other modules (quality/risk/history/market_data) ---

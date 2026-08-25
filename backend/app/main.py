@@ -14,7 +14,14 @@ from fastapi.staticfiles import StaticFiles
 
 from .grading import build_grading
 from .history import build_financial_timeline, build_historical_scores, explain_score_trend
-from .market_data import compute_valuation, fetch_forward_pe, fetch_price_history, fetch_stock_price
+from .market_data import (
+    compute_bull_base_bear,
+    compute_valuation,
+    compute_valuation_history,
+    fetch_key_statistics,
+    fetch_price_history,
+    fetch_stock_price,
+)
 from .normalize import build_company_financials
 from .pillars import compute_forge_score
 from .quality import compute_financial_quality, compute_piotroski_f_score
@@ -97,8 +104,8 @@ async def _analyze_ticker(ticker_key: str) -> dict[str, Any]:
     timeline = build_financial_timeline(company_facts)
 
     # Live market price is best-effort and clearly separated from SEC data.
-    price_info, forward_pe = await asyncio.gather(
-        fetch_stock_price(ticker_key), fetch_forward_pe(ticker_key)
+    price_info, key_stats = await asyncio.gather(
+        fetch_stock_price(ticker_key), fetch_key_statistics(ticker_key)
     )
     total_debt = None
     cash_val = None
@@ -106,7 +113,9 @@ async def _analyze_ticker(ticker_key: str) -> dict[str, Any]:
         total_debt = (cf.quarterly.short_term_debt.value or 0) + (cf.quarterly.long_term_debt.value or 0)
     if cf.quarterly.cash_and_equivalents.available:
         cash_val = cf.quarterly.cash_and_equivalents.value
-    valuation = compute_valuation(company_facts, price_info, total_debt, cash_val, forward_pe)
+    valuation = compute_valuation(company_facts, price_info, total_debt, cash_val, key_stats)
+    valuation_history = await compute_valuation_history(ticker_key, company_facts, total_debt, cash_val)
+    bull_base_bear = compute_bull_base_bear(valuation, valuation_history)
 
     market_cap_val = valuation.get("market_cap", {}).get("value") if valuation.get("market_cap", {}).get("available") else None
     altman = compute_altman_z_score(company_facts, market_cap_val)
@@ -151,6 +160,8 @@ async def _analyze_ticker(ticker_key: str) -> dict[str, Any]:
         "piotroski": piotroski,
         "altman": altman,
         "valuation": valuation,
+        "valuation_history": valuation_history,
+        "bull_base_bear": bull_base_bear,
         "market_price": price_info,
         "historical_scores": historical_scores,
         "trend_story": trend_story,

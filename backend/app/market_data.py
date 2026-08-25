@@ -27,7 +27,7 @@ from typing import Any, Optional
 import httpx
 
 from .models import NOT_REPORTED
-from .normalize import annual_series, fact_from_entry
+from .normalize import annual_series, fact_from_entry, latest_shares_outstanding, annual_shares_outstanding_series
 
 STOOQ_URL = "https://stooq.com/q/l/?s={symbol}.us&f=sd2t2ohlcv&h&e=csv"
 YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
@@ -118,29 +118,39 @@ async def fetch_stock_price(ticker: str) -> dict[str, Any]:
         return {"available": False, "reason": f"Could not reach any price feed (Yahoo Finance or Stooq): {exc}"}
 
 
-async def fetch_forward_pe(ticker: str) -> Optional[dict[str, Any]]:
-    """Best-effort forward P/E from Yahoo's defaultKeyStatistics module.
-    Returns None (not an error dict) on any failure - this is a bonus field
-    that quietly omits itself rather than blocking the rest of valuation."""
+async def fetch_key_statistics(ticker: str) -> dict[str, Any]:
+    """Best-effort bundle from Yahoo's defaultKeyStatistics module: forward
+    P/E, shares outstanding, dividend yield. Returns {} (not an error) on
+    any failure - these are all bonus/fallback fields that quietly omit
+    themselves rather than blocking the rest of valuation."""
     symbol = ticker.strip().upper()
     try:
-        params = {"modules": "defaultKeyStatistics"}
+        params = {"modules": "defaultKeyStatistics,summaryDetail"}
         async with httpx.AsyncClient(timeout=_TIMEOUT, headers=YAHOO_HEADERS) as client:
             resp = await client.get(YAHOO_QUOTE_SUMMARY_URL.format(symbol=symbol), params=params)
         if resp.status_code != 200:
-            return None
+            return {}
         data = resp.json()
         result = (((data.get("quoteSummary") or {}).get("result")) or [None])[0]
         if not result:
-            return None
-        fpe = (result.get("defaultKeyStatistics") or {}).get("forwardPE", {})
-        raw = fpe.get("raw")
-        if raw is None:
-            return None
-        return {"available": True, "value": round(raw, 2), "display": f"{raw:.2f}x",
-                "source": "Yahoo Finance (query1.finance.yahoo.com) - analyst-consensus forward estimate, not SEC data"}
-    except Exception:  # noqa: BLE001 - bonus field, fails silently
-        return None
+            return {}
+        out: dict[str, Any] = {}
+        dks = result.get("defaultKeyStatistics") or {}
+        summary = result.get("summaryDetail") or {}
+        fpe_raw = dks.get("forwardPE", {}).get("raw")
+        if fpe_raw is not None:
+            out["forward_pe"] = {"available": True, "value": round(fpe_raw, 2), "display": f"{fpe_raw:.2f}x",
+                                  "source": "Yahoo Finance (query1.finance.yahoo.com) - analyst-consensus forward estimate, not SEC data"}
+        shares_raw = dks.get("sharesOutstanding", {}).get("raw")
+        if shares_raw:
+            out["shares_outstanding"] = float(shares_raw)
+        div_raw = summary.get("dividendYield", {}).get("raw")
+        if div_raw is not None:
+            out["dividend_yield"] = {"available": True, "value": round(div_raw * 100, 2), "display": f"{div_raw*100:.2f}%",
+                                      "source": "Yahoo Finance (query1.finance.yahoo.com)"}
+        return out
+    except Exception:  # noqa: BLE001 - bonus fields, fail silently
+        return {}
 
 
 async def fetch_price_history(ticker: str, range_key: str) -> dict[str, Any]:
@@ -194,20 +204,19 @@ def _latest_annual(company_facts: dict[str, Any], tags: list[str], duration: boo
 
 def compute_valuation(company_facts: dict[str, Any], price_info: dict[str, Any],
                        total_debt: Optional[float], cash: Optional[float],
-                       forward_pe: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+                       key_stats: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """Combines a live price (if available) with real SEC fundamentals to
     compute market cap and valuation multiples. Every field is independently
     marked available/unavailable, with its own source and as-of date."""
+    key_stats = key_stats or {}
     out: dict[str, Any] = {
         "price_source": price_info.get("source") if price_info.get("available") else None,
         "price_source_short": price_info.get("source_short") if price_info.get("available") else None,
         "last_updated": price_info.get("fetched_at") if price_info.get("available") else None,
     }
 
-    if forward_pe:
-        out["forward_pe_ratio"] = forward_pe
-    else:
-        out["forward_pe_ratio"] = {"available": False, "display": NOT_REPORTED}
+    out["forward_pe_ratio"] = key_stats.get("forward_pe") or {"available": False, "display": NOT_REPORTED}
+    out["dividend_yield"] = key_stats.get("dividend_yield") or {"available": False, "display": NOT_REPORTED}
 
     if not price_info.get("available"):
         out["market_cap"] = {"available": False, "display": NOT_REPORTED}
@@ -215,7 +224,15 @@ def compute_valuation(company_facts: dict[str, Any], price_info: dict[str, Any],
         return out
 
     price = price_info["price"]
-    shares = _latest_annual(company_facts, ["CommonStockSharesOutstanding"], duration=False)
+    shares = latest_shares_outstanding(company_facts)
+    shares_source_note = f"SEC EDGAR XBRL: {shares.concept} ({shares.form}, period end {shares.period_end})" if shares.available else None
+    if not shares.available and key_stats.get("shares_outstanding"):
+        # Fall back to Yahoo Finance's reported share count only when SEC
+        # XBRL has no shares-outstanding tag at all - never used to override
+        # a real SEC figure, only to fill a genuine gap.
+        from .models import FactValue
+        shares = FactValue(value=key_stats["shares_outstanding"], available=True)
+        shares_source_note = "Yahoo Finance (query1.finance.yahoo.com) - SEC XBRL had no shares-outstanding tag for this filer"
     equity = _latest_annual(company_facts, ["StockholdersEquity"], duration=False)
     revenue = _latest_annual(company_facts, ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax",
                                                "RevenueFromContractWithCustomerIncludingAssessedTax", "SalesRevenueNet"], duration=True)
@@ -243,15 +260,19 @@ def compute_valuation(company_facts: dict[str, Any], price_info: dict[str, Any],
     out["market_cap"] = {"available": True, "value": market_cap, "display": fmt(market_cap),
                           "source": "price (see price_source above) x SEC-reported shares outstanding"}
     out["shares_outstanding"] = {"available": True, "value": shares.value, "as_of": shares.period_end,
-                                  "source": f"SEC EDGAR XBRL: CommonStockSharesOutstanding ({shares.form}, period end {shares.period_end})"}
+                                  "source": shares_source_note or "Yahoo Finance"}
     out["price"] = {"value": price, "as_of": price_info.get("date"), "source": out["price_source"]}
 
     if net_income and net_income.available and net_income.value:
         pe = market_cap / net_income.value
         out["pe_ratio"] = {"available": True, "value": round(pe, 2), "display": f"{pe:.2f}x",
                             "source": f"Market cap / SEC net income (FY{net_income.fiscal_year}, filed {net_income.filed})"}
+        eps = net_income.value / shares.value
+        out["eps"] = {"available": True, "value": round(eps, 2), "display": f"${eps:,.2f}",
+                      "source": f"SEC net income (FY{net_income.fiscal_year}) / shares outstanding"}
     else:
         out["pe_ratio"] = {"available": False, "display": NOT_REPORTED}
+        out["eps"] = {"available": False, "display": NOT_REPORTED}
 
     if equity and equity.available and equity.value:
         pb = market_cap / equity.value
@@ -292,3 +313,154 @@ def compute_valuation(company_facts: dict[str, Any], price_info: dict[str, Any],
         out["ev_sales"] = {"available": False, "display": NOT_REPORTED}
 
     return out
+
+
+def _nearest_price(points: list[dict[str, Any]], target_date: str) -> Optional[float]:
+    """Closest historical close to a given date (fiscal year end), tolerating
+    up to ~45 days of drift since exchanges are closed on the exact date."""
+    import datetime as _dt
+    try:
+        target = _dt.date.fromisoformat(target_date)
+    except (ValueError, TypeError):
+        return None
+    best = None
+    best_diff = None
+    for p in points:
+        try:
+            d = _dt.date.fromisoformat(p["date"])
+        except (ValueError, TypeError):
+            continue
+        diff = abs((d - target).days)
+        if diff > 45:
+            continue
+        if best_diff is None or diff < best_diff:
+            best_diff = diff
+            best = p["close"]
+    return best
+
+
+async def compute_valuation_history(ticker: str, company_facts: dict[str, Any],
+                                     total_debt: Optional[float], cash: Optional[float]) -> dict[str, Any]:
+    """Real, non-fabricated historical P/E, P/B, P/S and EV/EBITDA - one
+    data point per fiscal year end, built from actual historical closing
+    prices (Yahoo Finance) combined with the shares/earnings/equity/revenue
+    SEC reported for that same fiscal year (not today's share count applied
+    to the past). Returns available=False with a reason if either the price
+    history or the SEC series can't be resolved - never estimates a point."""
+    price_hist = await fetch_price_history(ticker, "MAX")
+    if not price_hist.get("available"):
+        return {"available": False, "reason": f"No historical price data: {price_hist.get('reason')}"}
+    points = price_hist["points"]
+
+    shares_series = annual_shares_outstanding_series(company_facts)
+    revenue_series = annual_series(company_facts, ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax",
+                                                     "RevenueFromContractWithCustomerIncludingAssessedTax", "SalesRevenueNet"], duration=True)
+    net_income_series = annual_series(company_facts, ["NetIncomeLoss", "ProfitLoss"], duration=True)
+    equity_series = annual_series(company_facts, ["StockholdersEquity"], duration=False)
+    op_income_series = annual_series(company_facts, ["OperatingIncomeLoss"], duration=True)
+
+    if not shares_series:
+        return {"available": False, "reason": "SEC XBRL has no annual shares-outstanding series for this filer"}
+
+    by_year_end = {sf.period_end: sf for sf in shares_series if sf.period_end}
+    rev_by_end = {e.get("end"): fact_from_entry(e) for e in revenue_series}
+    ni_by_end = {e.get("end"): fact_from_entry(e) for e in net_income_series}
+    eq_by_end = {e.get("end"): fact_from_entry(e) for e in equity_series}
+    oi_by_end = {e.get("end"): fact_from_entry(e) for e in op_income_series}
+
+    rows = []
+    for period_end, shares_fact in sorted(by_year_end.items(), reverse=True):
+        if not shares_fact.available or not shares_fact.value:
+            continue
+        price = _nearest_price(points, period_end)
+        if price is None:
+            continue
+        market_cap = price * shares_fact.value
+        row: dict[str, Any] = {"period_end": period_end, "price": round(price, 2), "market_cap": market_cap}
+        ni = ni_by_end.get(period_end)
+        if ni and ni.available and ni.value:
+            row["pe"] = round(market_cap / ni.value, 2)
+        eq = eq_by_end.get(period_end)
+        if eq and eq.available and eq.value:
+            row["pb"] = round(market_cap / eq.value, 2)
+        rev = rev_by_end.get(period_end)
+        if rev and rev.available and rev.value:
+            row["ps"] = round(market_cap / rev.value, 2)
+        if total_debt is not None and cash is not None:
+            ev = market_cap + total_debt - cash
+            oi = oi_by_end.get(period_end)
+            if oi and oi.available and oi.value:
+                row["ev_ebitda"] = round(ev / oi.value, 2)
+        rows.append(row)
+
+    if not rows:
+        return {"available": False, "reason": "Could not align any fiscal year end with a historical closing price"}
+
+    def _stats(field: str) -> dict[str, Any]:
+        vals_5y = [r[field] for r in rows[:5] if field in r]
+        vals_10y = [r[field] for r in rows[:10] if field in r]
+        current = rows[0].get(field)
+        avg5 = sum(vals_5y) / len(vals_5y) if vals_5y else None
+        avg10 = sum(vals_10y) / len(vals_10y) if vals_10y else None
+        out: dict[str, Any] = {
+            "available": current is not None,
+            "current": current,
+            "avg_5y": round(avg5, 2) if avg5 else None,
+            "avg_10y": round(avg10, 2) if avg10 else None,
+        }
+        if current is not None and avg5:
+            out["premium_discount_vs_5y_pct"] = round((current / avg5 - 1) * 100, 1)
+        if current is not None and avg10:
+            out["premium_discount_vs_10y_pct"] = round((current / avg10 - 1) * 100, 1)
+        return out
+
+    return {
+        "available": True,
+        "years_of_data": len(rows),
+        "series": rows,
+        "pe": _stats("pe"),
+        "pb": _stats("pb"),
+        "ps": _stats("ps"),
+        "ev_ebitda": _stats("ev_ebitda"),
+        "source": "Yahoo Finance historical closes x SEC EDGAR shares/earnings/equity/revenue for each matching fiscal year end",
+        "note": "Each year's multiple uses that year's own SEC-reported fundamentals and shares count, not today's - not a fabricated trend line.",
+    }
+
+
+def compute_bull_base_bear(valuation: dict[str, Any], valuation_history: dict[str, Any]) -> dict[str, Any]:
+    """Bull/Base/Bear price scenarios built only from real, already-computed
+    numbers: today's EPS applied to the low/average/high of this company's
+    own historical P/E range. No invented growth rate or multiple - if the
+    inputs aren't available, the case is marked unavailable rather than
+    guessed."""
+    eps = valuation.get("eps", {})
+    pe_hist = valuation_history.get("pe", {}) if valuation_history.get("available") else {}
+    if not eps.get("available") or not pe_hist.get("available"):
+        return {"available": False,
+                "reason": "Requires both current EPS and a resolvable historical P/E series - one or both are unavailable for this company."}
+
+    eps_val = eps["value"]
+    series = valuation_history.get("series", [])
+    pe_values = [r["pe"] for r in series if "pe" in r]
+    if not pe_values:
+        return {"available": False, "reason": "No historical P/E data points available"}
+
+    low_pe = min(pe_values)
+    high_pe = max(pe_values)
+    avg_pe = pe_hist.get("avg_5y") or pe_hist.get("avg_10y") or sum(pe_values) / len(pe_values)
+    current_price = valuation.get("price", {}).get("value")
+
+    def target(pe_mult):
+        return round(eps_val * pe_mult, 2) if pe_mult else None
+
+    return {
+        "available": True,
+        "current_price": current_price,
+        "bear": {"price_target": target(low_pe), "pe_used": round(low_pe, 2),
+                 "assumption": f"EPS (${eps_val:,.2f}) at this company's own lowest historical P/E ({low_pe:.1f}x) over the last {len(series)} fiscal years."},
+        "base": {"price_target": target(avg_pe), "pe_used": round(avg_pe, 2),
+                  "assumption": f"EPS (${eps_val:,.2f}) at this company's own average historical P/E ({avg_pe:.1f}x)."},
+        "bull": {"price_target": target(high_pe), "pe_used": round(high_pe, 2),
+                 "assumption": f"EPS (${eps_val:,.2f}) at this company's own highest historical P/E ({high_pe:.1f}x) over the last {len(series)} fiscal years."},
+        "methodology": "All three cases apply the current trailing EPS to this specific company's own historical P/E range (low/average/high) - no assumed growth rate or peer multiple is invented.",
+    }
