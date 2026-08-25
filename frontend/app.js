@@ -146,6 +146,7 @@
     renderHealthTab(data);
     renderQualityTab(data);
     renderValuationTab(data);
+    renderMarketTab(data);
     renderRiskTab(data);
     renderTimelineTab(data);
     renderModel3D(data);
@@ -159,9 +160,15 @@
   }
 
   // ---------- Dashboard ----------
+  function gradeClass(letter) {
+    if (!letter || letter === "N/A") return "grade-N";
+    return "grade-" + letter[0];
+  }
+
   function renderDashboard(data) {
     const el = document.getElementById("dashboard-card");
     const forge = data.forge || {};
+    const grading = data.grading || {};
     const badgeClass = "badge-" + slug(forge.label || "Insufficient Data");
     const meta = [];
     if (data.industry) meta.push(`Industry: ${esc(data.industry)}`);
@@ -171,7 +178,16 @@
       meta.push(`Price: $${data.valuation.price.value.toFixed(2)} (${esc(data.valuation.price.as_of || "")})`);
     }
 
-    const pillars = forge.pillars || {};
+    const score = data.score || {};
+    const kpiStripHtml = `
+      <div class="kpi-strip">
+        <div class="kpi-mini k-pass"><div class="n">${(score.passed_rules || []).length}</div><div class="l">Pass</div></div>
+        <div class="kpi-mini k-watch"><div class="n">${(score.watch_rules || []).length}</div><div class="l">Watch</div></div>
+        <div class="kpi-mini k-fail"><div class="n">${(score.failed_rules || []).length}</div><div class="l">Fail</div></div>
+        <div class="kpi-mini k-na"><div class="n">${(score.unavailable_rules || []).length}</div><div class="l">Unavailable</div></div>
+      </div>`;
+
+    const pillars = grading.pillars || forge.pillars || {};
     const pillarOrder = [
       ["financial_health", "Financial Health"], ["financial_quality", "Financial Quality"],
       ["valuation", "Valuation"], ["risk", "Risk"],
@@ -181,10 +197,13 @@
       const val = p.score === null || p.score === undefined ? "N/A" : Math.round(p.score);
       const pct = p.score === null || p.score === undefined ? 0 : p.score;
       const color = p.score === null ? "var(--na)" : p.score >= 80 ? "var(--pass)" : p.score >= 60 ? "var(--pass)" : p.score >= 40 ? "var(--watch)" : "var(--fail)";
+      const reasons = (p.key_reasons || []).map((r) => `<li>${esc(r)}</li>`).join("");
       return `<div class="pillar-card">
         <div class="pillar-name">${label}</div>
-        <div class="pillar-value" style="color:${color}">${val}${p.score !== null ? "" : ""}</div>
+        <div class="pillar-value" style="color:${color}">${val}</div>
         <div class="pillar-bar-track"><div class="pillar-bar-fill" style="width:${pct}%;background:${color}"></div></div>
+        <div class="pillar-grade-line"><span class="pg-letter">${esc(p.letter_grade || "N/A")}</span><span>${p.contribution_pct ? p.contribution_pct + "% of score" : "excluded"}</span></div>
+        ${reasons ? `<details class="pillar-detail"><summary>Why this score</summary><ul>${reasons}</ul></details>` : ""}
       </div>`;
     }).join("");
 
@@ -193,14 +212,20 @@
         <div class="dash-identity">
           <h2>${esc(data.company_name)} <span class="dash-ticker">${esc(data.ticker)}</span></h2>
           <div class="dash-meta">${meta.map((m) => `<span>${m}</span>`).join("")}</div>
+          ${kpiStripHtml}
         </div>
         <div class="forge-score-box">
           <div class="forge-score-label">FORGE Score</div>
           <div class="forge-score-value">${forge.forge_score === null || forge.forge_score === undefined ? "N/A" : Math.round(forge.forge_score)}<span style="font-size:1.2rem;color:var(--muted)"> / 100</span></div>
+          <div class="grade-row">
+            <span class="letter-grade ${gradeClass(grading.letter_grade)}">${esc(grading.letter_grade || "N/A")}</span>
+          </div>
+          <div class="health-classification">${esc(grading.health_classification || "Insufficient Data")}</div>
           <div class="forge-score-badge ${badgeClass}">${esc(forge.label || "Insufficient Data")}</div>
         </div>
       </div>
       <div class="pillar-grid">${pillarHtml}</div>
+      <p class="kpi-formula" style="margin-top:14px">${esc(grading.grading_methodology || "")}</p>
     `;
   }
 
@@ -406,10 +431,15 @@
     const v = data.valuation;
     const unavailable = { available: false, display: NA };
     const rows = [
-      ["Market Cap", v.market_cap || unavailable], ["P/E Ratio", v.pe_ratio || unavailable], ["P/B Ratio", v.pb_ratio || unavailable], ["P/S Ratio", v.ps_ratio || unavailable],
+      ["Market Cap", v.market_cap || unavailable], ["Shares Outstanding", v.shares_outstanding ? { available: true, display: Number(v.shares_outstanding.value).toLocaleString() } : unavailable],
+      ["P/E Ratio", v.pe_ratio || unavailable], ["Forward P/E", v.forward_pe_ratio || unavailable],
+      ["P/B Ratio", v.pb_ratio || unavailable], ["P/S Ratio", v.ps_ratio || unavailable],
       ["Enterprise Value", v.enterprise_value || unavailable], ["EV / EBITDA", v.ev_ebitda || unavailable], ["EV / Sales", v.ev_sales || unavailable],
     ];
-    const kpiHtml = rows.map(([label, m]) => `<div class="kpi-card"><div class="kpi-label">${label}</div><div class="kpi-value">${esc(m.display)}</div></div>`).join("");
+    const kpiHtml = rows.map(([label, m]) => `<div class="kpi-card"><div class="kpi-label">${label}</div><div class="kpi-value">${esc(m.display)}</div>${m.source ? `<div class="kpi-formula">${esc(m.source)}</div>` : ""}</div>`).join("");
+    const sourceLine = v.price_source
+      ? `<p class="source-line">Market data source: <strong>${esc(v.price_source_short || "market feed")}</strong> — last updated ${esc(v.last_updated || "unknown time")}. SEC-derived fundamentals (shares, equity, revenue, debt, cash) are combined with this live price; SEC data and market data are never blended into a single unlabeled number.</p>`
+      : "";
 
     let barsHtml = "";
     if (v.pe_ratio && v.pe_ratio.available) {
@@ -420,6 +450,7 @@
     el.innerHTML = `
       <p style="color:var(--muted)">${v.note ? esc(v.note) : "Live price via " + esc(v.price_source || "market feed") + ". Combined with SEC-reported fundamentals (never estimated)."}</p>
       <div class="metric-grid">${kpiHtml}</div>
+      ${sourceLine}
       ${barsHtml}
     `;
 
@@ -441,6 +472,180 @@
       });
       window.__forgeCharts.push(chart);
     }
+  }
+
+  // ---------- Market Chart tab (real historical price data) ----------
+  const HISTORY_RANGES = ["3M", "6M", "YTD", "1Y", "3Y", "5Y", "10Y", "MAX"];
+  const CHART_TYPES = ["Line", "Area", "Bar", "Scatter", "Histogram", "Candlestick"];
+  const PANEL_SIZES = ["Small", "Medium", "Large", "Full"];
+  let marketState = { range: "1Y", type: "Line", size: "Medium" };
+  let marketChartInstance = null;
+
+  function renderMarketTab(data) {
+    const el = document.getElementById("tab-market");
+    el.innerHTML = `
+      <div class="chart-box panel-size-${marketState.size.toLowerCase()}" id="market-panel">
+        <h3>Market Price History</h3>
+        <p class="chart-sub">Real historical closing prices for ${esc(data.ticker)} — never demo or static values. Choose a timeframe, chart type, and panel size below; each change re-fetches or redraws immediately.</p>
+        <div class="chart-controls">
+          <div class="control-group">
+            <label>Timeframe</label>
+            ${HISTORY_RANGES.map((r) => `<button type="button" class="tf-btn${r === marketState.range ? " active" : ""}" data-range="${r}">${r}</button>`).join("")}
+          </div>
+          <div class="control-group">
+            <label>Chart Type</label>
+            <select class="chart-type-select" id="market-type-select">
+              ${CHART_TYPES.map((t) => `<option value="${t}"${t === marketState.type ? " selected" : ""}>${t}</option>`).join("")}
+            </select>
+          </div>
+          <div class="control-group">
+            <label>Panel Size</label>
+            ${PANEL_SIZES.map((s) => `<button type="button" class="size-btn${s === marketState.size ? " active" : ""}" data-size="${s}">${s}</button>`).join("")}
+          </div>
+        </div>
+        <div class="chart-canvas-wrap" id="market-canvas-wrap"><canvas id="chart-market-price"></canvas></div>
+        <p class="source-line" id="market-source-line">Loading price history…</p>
+      </div>
+    `;
+
+    const panel = document.getElementById("market-panel");
+    panel.querySelectorAll(".tf-btn").forEach((btn) => btn.addEventListener("click", () => {
+      marketState.range = btn.dataset.range;
+      panel.querySelectorAll(".tf-btn").forEach((b) => b.classList.toggle("active", b === btn));
+      loadAndDrawMarket(data.ticker);
+    }));
+    document.getElementById("market-type-select").addEventListener("change", (e) => {
+      marketState.type = e.target.value;
+      loadAndDrawMarket(data.ticker, true);
+    });
+    panel.querySelectorAll(".size-btn").forEach((btn) => btn.addEventListener("click", () => {
+      marketState.size = btn.dataset.size;
+      panel.className = "chart-box panel-size-" + marketState.size.toLowerCase();
+      panel.querySelectorAll(".size-btn").forEach((b) => b.classList.toggle("active", b === btn));
+      if (marketChartInstance) marketChartInstance.resize();
+    }));
+
+    loadAndDrawMarket(data.ticker);
+  }
+
+  let marketFetchCache = {};
+  async function loadAndDrawMarket(ticker, skipFetch) {
+    const sourceLine = document.getElementById("market-source-line");
+    const cacheKey = ticker + ":" + marketState.range;
+    let payload = marketFetchCache[cacheKey];
+    if (!payload || !skipFetch) {
+      if (!payload) {
+        sourceLine.textContent = "Loading price history…";
+        try {
+          const resp = await fetch(`/api/price-history/${encodeURIComponent(ticker)}?range=${encodeURIComponent(marketState.range)}`);
+          payload = await resp.json();
+          marketFetchCache[cacheKey] = payload;
+        } catch (err) {
+          payload = { available: false, reason: err.message };
+        }
+      }
+    }
+    drawMarketChart(payload, sourceLine);
+  }
+
+  function drawMarketChart(payload, sourceLine) {
+    const canvasWrap = document.getElementById("market-canvas-wrap");
+    if (!canvasWrap) return;
+    if (marketChartInstance) { marketChartInstance.destroy(); marketChartInstance = null; }
+    canvasWrap.innerHTML = '<canvas id="chart-market-price"></canvas>';
+    const canvas = document.getElementById("chart-market-price");
+
+    if (!payload || !payload.available) {
+      canvasWrap.innerHTML = `<p style="padding:20px;color:var(--muted)">Data unavailable — ${esc((payload && payload.reason) || "the market-data provider could not be reached")}.</p>`;
+      sourceLine.textContent = "Market data source: unavailable for this request.";
+      return;
+    }
+    if (!window.Chart) {
+      canvasWrap.innerHTML = `<p style="padding:20px;color:var(--muted)">Charting library failed to load.</p>`;
+      return;
+    }
+
+    const colors = chartColors();
+    const points = payload.points;
+    const labels = points.map((p) => p.date);
+    const closes = points.map((p) => p.close);
+    let chart;
+
+    let effectiveType = marketState.type;
+    let candlestickUnavailableNote = "";
+    if (effectiveType === "Candlestick" && !Chart.registry.controllers.get("candlestick")) {
+      effectiveType = "Line";
+      candlestickUnavailableNote = " (Candlestick plugin failed to load — showing Line instead.)";
+    }
+
+    if (effectiveType === "Candlestick") {
+      chart = new Chart(canvas, {
+        type: "candlestick",
+        data: { datasets: [{ label: payload.range, data: points.map((p) => ({ x: new Date(p.date).getTime(), o: p.open, h: p.high, l: p.low, c: p.close })) }] },
+        options: {
+          plugins: { legend: { display: false } },
+          scales: { x: { type: "time", ticks: { color: colors.muted }, grid: { color: colors.border } }, y: { ticks: { color: colors.muted }, grid: { color: colors.border } } },
+        },
+      });
+    }
+    if (!chart && effectiveType === "Histogram") {
+      const returns = [];
+      for (let i = 1; i < closes.length; i++) {
+        if (closes[i - 1]) returns.push(((closes[i] - closes[i - 1]) / closes[i - 1]) * 100);
+      }
+      const bins = 16;
+      const min = Math.min(...returns), max = Math.max(...returns);
+      const width = (max - min) / bins || 1;
+      const counts = new Array(bins).fill(0);
+      returns.forEach((r) => { let idx = Math.floor((r - min) / width); if (idx >= bins) idx = bins - 1; if (idx < 0) idx = 0; counts[idx]++; });
+      const binLabels = counts.map((_, i) => `${(min + i * width).toFixed(1)}%`);
+      chart = new Chart(canvas, {
+        type: "bar",
+        data: { labels: binLabels, datasets: [{ label: "Daily return frequency", data: counts, backgroundColor: colors.brand, borderRadius: 4 }] },
+        options: {
+          plugins: { legend: { display: false } },
+          scales: { x: { ticks: { color: colors.muted, maxRotation: 60 }, grid: { display: false } }, y: { ticks: { color: colors.muted }, grid: { color: colors.border } } },
+        },
+      });
+    }
+    if (!chart && effectiveType === "Scatter") {
+      chart = new Chart(canvas, {
+        type: "scatter",
+        data: { datasets: [{ label: "Close", data: points.map((p, i) => ({ x: i, y: p.close })), backgroundColor: colors.brand }] },
+        options: {
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { ticks: { color: colors.muted, callback: (v) => labels[v] || "" }, grid: { display: false } },
+            y: { ticks: { color: colors.muted }, grid: { color: colors.border } },
+          },
+        },
+      });
+    }
+    if (!chart && effectiveType === "Bar") {
+      chart = new Chart(canvas, {
+        type: "bar",
+        data: { labels, datasets: [{ label: "Close", data: closes, backgroundColor: colors.brand }] },
+        options: {
+          plugins: { legend: { display: false } },
+          scales: { x: { ticks: { color: colors.muted, maxTicksLimit: 12 }, grid: { display: false } }, y: { ticks: { color: colors.muted }, grid: { color: colors.border } } },
+        },
+      });
+    }
+    if (!chart) {
+      // Line or Area (default fallback too)
+      const isArea = effectiveType === "Area";
+      chart = new Chart(canvas, {
+        type: "line",
+        data: { labels, datasets: [{ label: "Close", data: closes, borderColor: colors.brand, backgroundColor: isArea ? colors.brand + "33" : "transparent", fill: isArea, tension: 0.15, pointRadius: 0 }] },
+        options: {
+          plugins: { legend: { display: false } },
+          scales: { x: { ticks: { color: colors.muted, maxTicksLimit: 12 }, grid: { display: false } }, y: { ticks: { color: colors.muted }, grid: { color: colors.border } } },
+        },
+      });
+    }
+    marketChartInstance = chart;
+    window.__forgeCharts.push(chart);
+    sourceLine.textContent = `Market data source: ${payload.source || "Yahoo Finance"} — fetched ${payload.fetched_at || "just now"} — ${points.length} data points (${payload.interval || "daily"} interval).${candlestickUnavailableNote}`;
   }
 
   // ---------- Risk tab ----------

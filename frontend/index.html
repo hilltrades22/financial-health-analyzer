@@ -4,8 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FORGE — Financial Intelligence</title>
+<link rel="icon" type="image/png" href="/assets/favicon.png">
 <link rel="stylesheet" href="/assets/styles.css">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@0.2.1/dist/chartjs-chart-financial.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 </head>
@@ -13,6 +16,7 @@
   <header class="topbar">
     <div class="wrap topbar-inner">
       <div class="brand" id="brand-home">
+        <span class="brand-logo-badge"><img src="/assets/forge-logo.png" alt="FORGE logo" class="brand-logo-img"></span>
         <span class="brand-mark">FORGE</span>
         <span class="brand-sub">Financial Intelligence</span>
       </div>
@@ -24,6 +28,7 @@
 
   <main class="wrap">
     <section id="home-panel" class="home-panel">
+      <span class="home-logo-badge"><img src="/assets/forge-logo.png" alt="FORGE logo" class="home-logo-img"></span>
       <h1 class="home-title">FORGE</h1>
       <p class="home-tagline">Understand the financial strength behind a company.</p>
       <form id="search-form" autocomplete="off" class="search-form">
@@ -65,6 +70,7 @@
         <button class="tab-btn active" data-tab="health">Financial Health</button>
         <button class="tab-btn" data-tab="quality">Financial Quality</button>
         <button class="tab-btn" data-tab="valuation">Valuation</button>
+        <button class="tab-btn" data-tab="market">Market Chart</button>
         <button class="tab-btn" data-tab="risk">Risk Center</button>
         <button class="tab-btn" data-tab="timeline">Timeline</button>
         <button class="tab-btn" data-tab="model3d">3D Model</button>
@@ -74,6 +80,7 @@
       <section class="tab-panel active" id="tab-health"></section>
       <section class="tab-panel" id="tab-quality"></section>
       <section class="tab-panel" id="tab-valuation"></section>
+      <section class="tab-panel" id="tab-market"></section>
       <section class="tab-panel" id="tab-risk"></section>
       <section class="tab-panel" id="tab-timeline"></section>
       <section class="tab-panel" id="tab-model3d"></section>
