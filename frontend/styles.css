@@ -264,6 +264,7 @@ body {
   padding: 5px 12px; border-radius: 999px; font-size: 0.82rem; cursor: pointer;
 }
 .tf-btn.active { background: var(--brand); border-color: var(--brand); color: #fff; }
+.freq-toggle { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
 
 .gauge-row { display: flex; gap: 20px; flex-wrap: wrap; justify-content: center; }
 .gauge-item { text-align: center; }

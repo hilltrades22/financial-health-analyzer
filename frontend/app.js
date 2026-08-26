@@ -62,6 +62,8 @@
   const printBtn = document.getElementById("print-btn");
 
   let currentData = null;
+  let currentTicker = null;
+  let timelineCache = {}; // { annual: [...], quarterly: [...] } for currentTicker
   window.__forgeCharts = [];
 
   function showPanel(panel) {
@@ -117,6 +119,8 @@
         return;
       }
       currentData = body;
+      currentTicker = ticker;
+      timelineCache = { annual: body.timeline, quarterly: null };
       render(body);
       showPanel(resultsPanel);
       window.scrollTo({ top: 0, behavior: "instant" });
@@ -795,8 +799,12 @@
     { key: "cash", label: "Cash", color: "accent" }, { key: "total_debt", label: "Total Debt", color: "fail" },
     { key: "equity", label: "Equity", color: "watch" }, { key: "free_cash_flow", label: "Free Cash Flow", color: "brand" },
     { key: "retained_earnings", label: "Retained Earnings", color: "pass" }, { key: "buybacks", label: "Buybacks", color: "fail" },
+    { key: "operating_cash_flow", label: "Operating Cash Flow", color: "brand" }, { key: "capital_expenditures", label: "CapEx", color: "fail" },
+    { key: "eps", label: "EPS", color: "watch" }, { key: "net_margin_pct", label: "Net Margin %", color: "pass" },
+    { key: "gross_margin_pct", label: "Gross Margin %", color: "accent" },
   ];
   let timelineActive = new Set(["revenue", "net_income", "cash", "total_debt"]);
+  let timelineFrequency = "annual";
 
   function filterTimeline(timeline, tf) {
     if (!timeline || !timeline.length) return [];
@@ -820,6 +828,20 @@
     });
   }
 
+  async function fetchTimelineFrequency(freq) {
+    if (timelineCache[freq]) return timelineCache[freq];
+    if (!currentTicker) return [];
+    try {
+      const resp = await fetch(`/api/analyze/${encodeURIComponent(currentTicker)}?frequency=${freq}`);
+      const body = await safeJson(resp);
+      const tl = (resp.ok && body && body.timeline) || [];
+      timelineCache[freq] = tl;
+      return tl;
+    } catch (e) {
+      return [];
+    }
+  }
+
   function renderTimelineTab(data) {
     const el = document.getElementById("tab-timeline");
     if (!data.timeline || !data.timeline.length) {
@@ -832,8 +854,15 @@
     el.innerHTML = `
       <div class="chart-box">
         <h3>Financial Timeline</h3>
-        <div class="timeframe-controls" id="timeline-tf"></div>
+        <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:8px">
+          <div class="timeframe-controls" id="timeline-tf"></div>
+          <div class="freq-toggle" id="timeline-freq">
+            <button class="tf-btn${timelineFrequency === "annual" ? " active" : ""}" data-freq="annual">Annual</button>
+            <button class="tf-btn${timelineFrequency === "quarterly" ? " active" : ""}" data-freq="quarterly">Quarterly</button>
+          </div>
+        </div>
         <div style="margin-bottom:10px">${toggles}</div>
+        <p class="chart-sub" id="timeline-loading" hidden>Loading quarterly data...</p>
         <div class="chart-canvas-wrap"><canvas id="chart-timeline"></canvas></div>
       </div>
       <div class="chart-box">
@@ -846,17 +875,38 @@
     el.querySelectorAll('input[type="checkbox"][data-metric]').forEach((cb) => {
       cb.addEventListener("change", () => {
         if (cb.checked) timelineActive.add(cb.dataset.metric); else timelineActive.delete(cb.dataset.metric);
-        drawTimelineChart(getCurrentTimelineFilter(data.timeline));
+        drawTimelineChart(getCurrentTimelineFilter(timelineCache[timelineFrequency] || data.timeline));
       });
     });
 
-    buildTimeframeButtons("timeline-tf", data.timeline, (filtered) => drawTimelineChart(filtered));
-    drawTimelineChart(filterTimeline(data.timeline, "MAX"));
+    function activeTimelineFull() { return timelineCache[timelineFrequency] || data.timeline; }
+
+    buildTimeframeButtons("timeline-tf", activeTimelineFull(), (filtered) => drawTimelineChart(filtered));
+    drawTimelineChart(filterTimeline(activeTimelineFull(), "MAX"));
+
+    el.querySelectorAll('#timeline-freq button[data-freq]').forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const freq = btn.dataset.freq;
+        if (freq === timelineFrequency) return;
+        el.querySelectorAll('#timeline-freq button').forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        const loadingEl = document.getElementById("timeline-loading");
+        if (freq === "quarterly" && !timelineCache.quarterly) { loadingEl.hidden = false; }
+        const tl = await fetchTimelineFrequency(freq);
+        loadingEl.hidden = true;
+        timelineFrequency = freq;
+        buildTimeframeButtons("timeline-tf", tl, (filtered) => drawTimelineChart(filtered));
+        drawTimelineChart(filterTimeline(tl, "MAX"));
+      });
+    });
+
     drawScoreHistoryChart(data.historical_scores);
   }
 
   let lastTimelineFilter = null;
   function getCurrentTimelineFilter(full) { return lastTimelineFilter || full; }
+
+  const TIMELINE_PCT_OR_PER_SHARE = new Set(["eps", "net_margin_pct", "gross_margin_pct"]);
 
   function drawTimelineChart(timeline) {
     lastTimelineFilter = timeline;
@@ -864,16 +914,26 @@
     if (!el || !window.Chart) return;
     const colors = chartColors();
     const colorMap = { brand: colors.brand, pass: colors.pass, accent: cssVar("--accent"), fail: colors.fail, watch: colors.watch };
-    const labels = timeline.map((t) => "FY" + (t.fiscal_year || t.period_end));
-    const datasets = TIMELINE_METRICS.filter((m) => timelineActive.has(m.key)).map((m) => ({
+    const labels = timeline.map((t) => t.fiscal_period && t.fiscal_period !== "FY" ? `${t.fiscal_period} ${t.fiscal_year || ""}` : "FY" + (t.fiscal_year || t.period_end));
+    const activeMetrics = TIMELINE_METRICS.filter((m) => timelineActive.has(m.key));
+    const usesSecondAxis = activeMetrics.some((m) => TIMELINE_PCT_OR_PER_SHARE.has(m.key));
+    const datasets = activeMetrics.map((m) => ({
       label: m.label, data: timeline.map((t) => t[m.key]), borderColor: colorMap[m.color], backgroundColor: colorMap[m.color], tension: 0.3, fill: false,
+      yAxisID: TIMELINE_PCT_OR_PER_SHARE.has(m.key) ? "y1" : "y",
     }));
+    const scales = {
+      y: { ticks: { color: colors.muted, callback: (v) => fmtUsd(v) }, grid: { color: colors.border } },
+      x: { ticks: { color: colors.text }, grid: { display: false } },
+    };
+    if (usesSecondAxis) {
+      scales.y1 = { position: "right", ticks: { color: colors.muted }, grid: { display: false } };
+    }
     const chart = getOrCreateChart(el, {
       type: "line",
       data: { labels, datasets },
       options: {
         plugins: { legend: { labels: { color: colors.text } } },
-        scales: { y: { ticks: { color: colors.muted, callback: (v) => fmtUsd(v) }, grid: { color: colors.border } }, x: { ticks: { color: colors.text }, grid: { display: false } } },
+        scales,
       },
     });
   }
