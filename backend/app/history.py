@@ -103,30 +103,57 @@ def build_historical_scores(company_facts: dict[str, Any], max_years: int = 10) 
     return results
 
 
-def build_financial_timeline(company_facts: dict[str, Any], max_years: int = 10) -> list[dict[str, Any]]:
-    """Per-fiscal-year series for the Financial Timeline chart: revenue, net
+def build_financial_timeline(company_facts: dict[str, Any], max_years: int = 10, frequency: str = "annual") -> list[dict[str, Any]]:
+    """Per-period series for the Financial Timeline chart: revenue, net
     income, cash, total debt, equity, free cash flow, retained earnings,
-    and buybacks. Any year missing a given figure simply omits that field -
-    nothing is interpolated or estimated."""
+    buybacks, operating cash flow, capex, EPS, and margins. Any period
+    missing a given figure simply omits that field - nothing is
+    interpolated or estimated.
+
+    frequency="annual" (default) uses one point per fiscal year (10-K).
+    frequency="quarterly" uses one point per individual fiscal quarter
+    (10-Q duration facts only - cumulative YTD facts are excluded so a
+    "quarterly" revenue series is genuinely single-quarter, not a mix)."""
     revenue_tags = ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax",
                      "RevenueFromContractWithCustomerIncludingAssessedTax", "SalesRevenueNet"]
     net_income_tags = ["NetIncomeLoss", "ProfitLoss"]
+    gross_profit_tags = ["GrossProfit"]
 
-    re_series = N.annual_series(company_facts, N.RETAINED_EARNINGS_TAGS, duration=False)
+    series_fn = N.quarterly_series if frequency == "quarterly" else N.annual_series
+    max_points = max_years * 4 if frequency == "quarterly" else max_years
+
+    re_series = series_fn(company_facts, N.RETAINED_EARNINGS_TAGS, duration=False)
     if not re_series:
         return []
-    periods = [e.get("end") for e in re_series][:max_years]
+    periods = [e.get("end") for e in re_series][:max_points]
 
-    revenue_by = _series_by_period(company_facts, revenue_tags, True)
-    net_income_by = _series_by_period(company_facts, net_income_tags, True)
-    cash_by = _series_by_period(company_facts, N.CASH_TAGS, False)
-    st_debt_by = _series_by_period(company_facts, N.DEBT_CURRENT_AGGREGATE_TAGS, False)
-    lt_debt_by = _series_by_period(company_facts, N.LONG_TERM_DEBT_TAGS, False)
-    equity_by = _series_by_period(company_facts, N.TOTAL_EQUITY_TAGS, False)
-    ocf_by = _series_by_period(company_facts, N.OPERATING_CASH_FLOW_TAGS, True)
-    capex_by = _series_by_period(company_facts, N.CAPEX_TAGS, True)
+    def by_period(tags, duration):
+        s = series_fn(company_facts, tags, duration=duration)
+        return {e.get("end"): N.fact_from_entry(e) for e in s}
+
+    revenue_by = by_period(revenue_tags, True)
+    net_income_by = by_period(net_income_tags, True)
+    gross_profit_by = by_period(gross_profit_tags, True)
+    cash_by = by_period(N.CASH_TAGS, False)
+    st_debt_by = by_period(N.DEBT_CURRENT_AGGREGATE_TAGS, False)
+    lt_debt_by = by_period(N.LONG_TERM_DEBT_TAGS, False)
+    equity_by = by_period(N.TOTAL_EQUITY_TAGS, False)
+    ocf_by = by_period(N.OPERATING_CASH_FLOW_TAGS, True)
+    capex_by = by_period(N.CAPEX_TAGS, True)
     re_by = {e.get("end"): N.fact_from_entry(e) for e in re_series}
-    buyback_by = _series_by_period(company_facts, N.REPURCHASE_TAGS, True)
+    buyback_by = by_period(N.REPURCHASE_TAGS, True)
+    shares_series = N.annual_shares_outstanding_series(company_facts)
+    # Shares outstanding is a single point-in-time figure per filing, not a
+    # per-period series, so EPS uses the shares count nearest each period's
+    # own filing rather than pretending a quarterly shares series exists.
+    shares_sorted = sorted(shares_series, key=lambda f: f.period_end or "")
+
+    def nearest_shares(period_end):
+        best = None
+        for sf in shares_sorted:
+            if sf.period_end and sf.period_end <= period_end:
+                best = sf
+        return best.value if best else (shares_sorted[0].value if shares_sorted else None)
 
     def v(d, key):
         f = d.get(key)
@@ -143,17 +170,30 @@ def build_financial_timeline(company_facts: dict[str, Any], max_years: int = 10)
         ocf = v(ocf_by, period_end)
         capex = v(capex_by, period_end)
         fcf = (ocf - abs(capex)) if (ocf is not None and capex is not None) else None
+        revenue = v(revenue_by, period_end)
+        net_income = v(net_income_by, period_end)
+        gross_profit = v(gross_profit_by, period_end)
+        shares = nearest_shares(period_end)
+        eps = (net_income / shares) if (net_income is not None and shares) else None
+        net_margin = (net_income / revenue * 100) if (net_income is not None and revenue) else None
+        gross_margin = (gross_profit / revenue * 100) if (gross_profit is not None and revenue) else None
         timeline.append({
             "fiscal_year": re_series[i].get("fy"),
+            "fiscal_period": re_series[i].get("fp"),
             "period_end": period_end,
-            "revenue": v(revenue_by, period_end),
-            "net_income": v(net_income_by, period_end),
+            "revenue": revenue,
+            "net_income": net_income,
             "cash": cash,
             "total_debt": total_debt,
             "equity": v(equity_by, period_end),
             "free_cash_flow": fcf,
             "retained_earnings": v(re_by, period_end),
             "buybacks": v(buyback_by, period_end),
+            "operating_cash_flow": ocf,
+            "capital_expenditures": capex,
+            "eps": round(eps, 2) if eps is not None else None,
+            "net_margin_pct": round(net_margin, 1) if net_margin is not None else None,
+            "gross_margin_pct": round(gross_margin, 1) if gross_margin is not None else None,
         })
     timeline.sort(key=lambda r: r["period_end"] or "")
     return timeline

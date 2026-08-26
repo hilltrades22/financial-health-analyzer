@@ -64,9 +64,10 @@ async def health() -> dict[str, Any]:
     }
 
 
-async def _analyze_ticker(ticker_key: str) -> dict[str, Any]:
+async def _analyze_ticker(ticker_key: str, frequency: str = "annual") -> dict[str, Any]:
     now = time.time()
-    cached = _cache.get(ticker_key)
+    cache_key = f"{ticker_key}:{frequency}"
+    cached = _cache.get(cache_key)
     if cached and (now - cached[0]) < _CACHE_TTL:
         return cached[1]
 
@@ -101,7 +102,7 @@ async def _analyze_ticker(ticker_key: str) -> dict[str, Any]:
     piotroski = compute_piotroski_f_score(company_facts)
     historical_scores = build_historical_scores(company_facts)
     trend_story = explain_score_trend(historical_scores)
-    timeline = build_financial_timeline(company_facts)
+    timeline = build_financial_timeline(company_facts, frequency=frequency)
 
     # Live market price is best-effort and clearly separated from SEC data.
     price_info, key_stats = await asyncio.gather(
@@ -203,13 +204,14 @@ async def _analyze_ticker(ticker_key: str) -> dict[str, Any]:
         "market_data_source": "Yahoo Finance (query1.finance.yahoo.com), with Stooq.com as a fallback - used only for live price / market cap / valuation multiples / price history, clearly separate from SEC data.",
     }
 
-    _cache[ticker_key] = (now, result)
+    _cache[cache_key] = (now, result)
     return result
 
 
 @app.get("/api/analyze/{ticker}")
-async def analyze(ticker: str) -> JSONResponse:
-    result = await _analyze_ticker(ticker.strip().upper())
+async def analyze(ticker: str, frequency: str = "annual") -> JSONResponse:
+    freq = frequency.strip().lower() if frequency.strip().lower() == "quarterly" else "annual"
+    result = await _analyze_ticker(ticker.strip().upper(), freq)
     return JSONResponse(result)
 
 

@@ -197,6 +197,45 @@ def _annual_series(company_facts: dict[str, Any], tags: Iterable[str], duration:
     return out
 
 
+def _quarterly_series(company_facts: dict[str, Any], tags: Iterable[str], duration: bool) -> list[dict[str, Any]]:
+    """Every individual fiscal quarter's datapoint (not just the latest),
+    merged across candidate tags the same way _annual_series is, so the
+    Financial Timeline's Quarterly view has one real point per quarter
+    instead of one point per year. A duration concept is restricted to a
+    ~90-day span (single quarter) - this deliberately EXCLUDES the
+    cumulative 6-/9-month YTD duration facts some filers also report
+    alongside their quarterly ones, so a quarterly revenue series isn't
+    accidentally a mix of single-quarter and multi-quarter totals."""
+    by_end: dict[str, dict[str, Any]] = {}
+    for tag in tags:
+        entries = _units_for(company_facts, tag)
+        for e in entries:
+            if e.get("form") not in QUARTERLY_ELIGIBLE_FORMS:
+                continue
+            end = _parse_date(e.get("end"))
+            if end is None:
+                continue
+            if duration:
+                start = _parse_date(e.get("start"))
+                if start is None:
+                    continue
+                span_days = (end - start).days
+                if span_days < 75 or span_days > 100:
+                    continue  # single fiscal quarter only, not a YTD cumulative duration
+            else:
+                if "start" in e:
+                    continue
+            key = e.get("end")
+            prev = by_end.get(key)
+            if prev is None or (e.get("filed") or "") > (prev.get("filed") or ""):
+                by_end[key] = e
+    if not by_end:
+        return []
+    out = list(by_end.values())
+    out.sort(key=lambda e: _parse_date(e.get("end")) or date.min, reverse=True)
+    return out
+
+
 def _fact_from_entry(entry: Optional[dict[str, Any]]) -> FactValue:
     if entry is None:
         return FactValue.missing()
@@ -346,6 +385,7 @@ def annual_shares_outstanding_series(company_facts: dict[str, Any]) -> list[Fact
 # --- Public re-exports for other modules (quality/risk/history/market_data) ---
 latest_instant = _latest_instant
 annual_series = _annual_series
+quarterly_series = _quarterly_series
 fact_from_entry = _fact_from_entry
 QUARTERLY_FORMS = QUARTERLY_ELIGIBLE_FORMS
 
