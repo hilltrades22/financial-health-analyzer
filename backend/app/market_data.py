@@ -441,13 +441,19 @@ def compute_bull_base_bear(valuation: dict[str, Any], valuation_history: dict[st
 
     eps_val = eps["value"]
     series = valuation_history.get("series", [])
-    pe_values = [r["pe"] for r in series if "pe" in r]
+    # Negative P/E values (from a loss-making fiscal year) aren't a
+    # meaningful valuation floor - excluding them keeps the Bear case from
+    # producing a nonsensical negative price target off a year the company
+    # simply lost money, rather than being cheaply valued.
+    pe_values = [r["pe"] for r in series if "pe" in r and r["pe"] > 0]
     if not pe_values:
-        return {"available": False, "reason": "No historical P/E data points available"}
+        return {"available": False, "reason": "No positive historical P/E data points available (company had losses in every matched fiscal year)"}
 
     low_pe = min(pe_values)
     high_pe = max(pe_values)
-    avg_pe = pe_hist.get("avg_5y") or pe_hist.get("avg_10y") or sum(pe_values) / len(pe_values)
+    positive_avg = sum(pe_values) / len(pe_values)
+    avg_pe = pe_hist.get("avg_5y") if (pe_hist.get("avg_5y") and pe_hist["avg_5y"] > 0) else \
+             pe_hist.get("avg_10y") if (pe_hist.get("avg_10y") and pe_hist["avg_10y"] > 0) else positive_avg
     current_price = valuation.get("price", {}).get("value")
 
     def target(pe_mult):
@@ -457,10 +463,10 @@ def compute_bull_base_bear(valuation: dict[str, Any], valuation_history: dict[st
         "available": True,
         "current_price": current_price,
         "bear": {"price_target": target(low_pe), "pe_used": round(low_pe, 2),
-                 "assumption": f"EPS (${eps_val:,.2f}) at this company's own lowest historical P/E ({low_pe:.1f}x) over the last {len(series)} fiscal years."},
+                 "assumption": f"EPS (${eps_val:,.2f}) at this company's own lowest historical P/E ({low_pe:.1f}x) over the last {len(pe_values)} profitable fiscal years."},
         "base": {"price_target": target(avg_pe), "pe_used": round(avg_pe, 2),
                   "assumption": f"EPS (${eps_val:,.2f}) at this company's own average historical P/E ({avg_pe:.1f}x)."},
         "bull": {"price_target": target(high_pe), "pe_used": round(high_pe, 2),
-                 "assumption": f"EPS (${eps_val:,.2f}) at this company's own highest historical P/E ({high_pe:.1f}x) over the last {len(series)} fiscal years."},
+                 "assumption": f"EPS (${eps_val:,.2f}) at this company's own highest historical P/E ({high_pe:.1f}x) over the last {len(pe_values)} profitable fiscal years."},
         "methodology": "All three cases apply the current trailing EPS to this specific company's own historical P/E range (low/average/high) - no assumed growth rate or peer multiple is invented.",
     }
