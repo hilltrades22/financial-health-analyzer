@@ -127,9 +127,17 @@ async def _analyze_ticker(ticker_key: str, frequency: str = "annual") -> dict[st
         None,
     )
     try:
-        business_mix = await build_business_mix(
-            _sec_client, cik, submissions, cf.annual.period_end, cf.annual.period_start, annual_revenue_val
+        business_mix = await asyncio.wait_for(
+            build_business_mix(
+                _sec_client, cik, submissions, cf.annual.period_end, cf.annual.period_start, annual_revenue_val
+            ),
+            timeout=25.0,
         )
+    except asyncio.TimeoutError:
+        # Business Mix is best-effort - never let a slow filing (a large XBRL
+        # instance document, or a fallback that had to try multiple 10-Ks)
+        # hold up the rest of the analysis.
+        business_mix = {"available": False, "reason": "Not reported / unavailable - segment data took too long to retrieve from SEC EDGAR for this company.", "business_segments": [], "geographic": []}
     except Exception:
         # Business Mix is best-effort - never let a parsing edge case in one
         # filer's XBRL take down the whole analysis.

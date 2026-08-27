@@ -187,12 +187,21 @@ def _drop_aggregate_members(by_member: dict[str, float]) -> dict[str, float]:
     labels = list(by_member.keys())
     if len(labels) < 3:
         return by_member
+    # Real aggregate/roll-up members are sums of a small handful of children
+    # (2-6 in practice). Checking every possible subset size is combinatorially
+    # explosive for filers that tag many dimensional members (can be 20+ for
+    # some geography/segment combinations) - cap both the member count this
+    # runs on and the subset size so one filer's XBRL can never hang the
+    # request.
+    if len(labels) > 20:
+        return by_member
+    max_r = min(len(labels) - 1, 6)
     to_drop = set()
     for i, li in enumerate(labels):
         vi = by_member[li]
         others = [lj for j, lj in enumerate(labels) if j != i]
         found = False
-        for r in range(2, len(others) + 1):
+        for r in range(2, min(len(others), max_r) + 1):
             for combo in itertools.combinations(others, r):
                 s = sum(by_member[c] for c in combo)
                 if abs(s - vi) <= max(1.0, vi * 0.005):
