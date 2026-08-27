@@ -168,6 +168,7 @@
     renderMarketTab(data);
     renderRiskTab(data);
     renderTimelineTab(data);
+    renderBusinessMixTab(data);
     renderModel3D(data);
     renderCompareTab(data);
     renderDataSources(data);
@@ -1023,6 +1024,70 @@
         plugins: {
           legend: { position: "right", labels: { color: colors.text } },
           tooltip: { callbacks: { label: (ctx) => { const total = parts.reduce((s, p) => s + p.value, 0); const pct = total ? (ctx.parsed / total * 100).toFixed(1) : "0.0"; return `${ctx.label}: ${fmtUsd(ctx.parsed)} (${pct}%)`; } } },
+        },
+      },
+    });
+  }
+
+  // ---------- Business Mix / Revenue Map tab ----------
+  function renderBusinessMixTab(data) {
+    const el = document.getElementById("tab-businessmix");
+    const bm = data.business_mix;
+    if (!bm || !bm.available) {
+      const reason = (bm && bm.reason) || NA;
+      el.innerHTML = `<div class="chart-box"><h3>Business Mix / Revenue Map</h3><p>${esc(reason)}</p></div>`;
+      return;
+    }
+    const filingNote = bm.filing ? `Source: ${esc(bm.source)} — 10-K filed ${esc(bm.filing.filing_date || "unknown date")}, fiscal year ended ${esc(bm.period_end || "unknown")}.` : bm.source;
+
+    const sections = [];
+    if (bm.business_segments && bm.business_segments.length) {
+      sections.push(`
+        <div class="chart-box">
+          <h3>Revenue by Business Segment / Product</h3>
+          <p class="chart-sub">${esc(filingNote)}</p>
+          <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:center">
+            <div class="chart-canvas-wrap short" style="flex:1;min-width:260px"><canvas id="chart-mix-business"></canvas></div>
+            <div style="flex:1;min-width:260px">${businessMixTable(bm.business_segments)}</div>
+          </div>
+        </div>`);
+    }
+    if (bm.geographic && bm.geographic.length) {
+      sections.push(`
+        <div class="chart-box">
+          <h3>Revenue by Geography</h3>
+          <p class="chart-sub">${esc(filingNote)}</p>
+          <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:center">
+            <div class="chart-canvas-wrap short" style="flex:1;min-width:260px"><canvas id="chart-mix-geo"></canvas></div>
+            <div style="flex:1;min-width:260px">${businessMixTable(bm.geographic)}</div>
+          </div>
+        </div>`);
+    }
+    el.innerHTML = sections.join("");
+    if (bm.business_segments && bm.business_segments.length) drawMixDonut("chart-mix-business", bm.business_segments);
+    if (bm.geographic && bm.geographic.length) drawMixDonut("chart-mix-geo", bm.geographic);
+  }
+
+  function businessMixTable(rows) {
+    const body = rows.map((r) => `<tr><td>${esc(r.label)}</td><td>${fmtUsd(r.value)}</td><td>${r.pct_of_total.toFixed(1)}%</td></tr>`).join("");
+    return `<table class="data-table"><thead><tr><th>Segment</th><th>Revenue</th><th>% of Total</th></tr></thead><tbody>${body}</tbody></table>`;
+  }
+
+  function drawMixDonut(canvasId, rows) {
+    const el = document.getElementById(canvasId);
+    if (!el || !window.Chart) return;
+    const colors = chartColors();
+    const palette = [colors.brand, colors.pass, colors.watch, colors.fail, cssVar("--accent"), colors.na];
+    const chart = getOrCreateChart(el, {
+      type: "doughnut",
+      data: {
+        labels: rows.map((r) => r.label),
+        datasets: [{ data: rows.map((r) => r.value), backgroundColor: rows.map((_, i) => palette[i % palette.length]) }],
+      },
+      options: {
+        plugins: {
+          legend: { position: "right", labels: { color: colors.text } },
+          tooltip: { callbacks: { label: (ctx) => `${ctx.label}: ${fmtUsd(ctx.parsed)} (${rows[ctx.dataIndex].pct_of_total.toFixed(1)}%)` } },
         },
       },
     });

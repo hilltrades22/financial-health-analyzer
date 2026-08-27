@@ -266,6 +266,10 @@ body {
 .tf-btn.active { background: var(--brand); border-color: var(--brand); color: #fff; }
 .freq-toggle { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
 
+.data-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+.data-table th, .data-table td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); }
+.data-table th { color: var(--muted); font-weight: 600; }
+
 .gauge-row { display: flex; gap: 20px; flex-wrap: wrap; justify-content: center; }
 .gauge-item { text-align: center; }
 .gauge-title { font-weight: 700; margin-top: 6px; }
