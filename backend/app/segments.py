@@ -23,11 +23,19 @@ REVENUE_TAGS = {
     "SalesRevenueNet",
 }
 
-BUSINESS_AXES = {
-    "StatementBusinessSegmentsAxis",
-    "ProductOrServiceAxis",
-}
+# A filer may tag revenue on BOTH of these axes for the same period (e.g.
+# Amazon reports North America / International / AWS operating segments on
+# StatementBusinessSegmentsAxis *and, separately*, Online stores / AWS /
+# Advertising / etc. product-and-service categories on ProductOrServiceAxis).
+# These are two different, non-comparable partitions of the same total
+# revenue - merging them into one breakdown silently mixes incompatible
+# categories and produces a total that doesn't reconcile to actual revenue.
+# We therefore try each axis SEPARATELY and keep only the one whose members
+# actually reconcile to the company's real total revenue.
+BUSINESS_SEGMENT_AXIS = {"StatementBusinessSegmentsAxis"}
+PRODUCT_SERVICE_AXIS = {"ProductOrServiceAxis"}
 GEOGRAPHIC_AXES = {"StatementGeographicalAxis"}
+_RECONCILE_TOLERANCE = 0.03  # breakdown total must be within 3% of real revenue
 
 _LINKBASE_SUFFIXES = ("_cal.xml", "_def.xml", "_lab.xml", "_pre.xml", ".xsd")
 
@@ -205,7 +213,7 @@ def _build_breakdown(facts: list[dict[str, Any]], axes: set[str], target_start: 
     )
 
 
-async def build_business_mix(sec_client: SecClient, cik: int, submissions: dict[str, Any], annual_period_end: Optional[str], annual_period_start: Optional[str]) -> dict[str, Any]:
+async def build_business_mix(sec_client: SecClient, cik: int, submissions: dict[str, Any], annual_period_end: Optional[str], annual_period_start: Optional[str], total_revenue: Optional[float] = None) -> dict[str, Any]:
     """Real segment/geographic revenue mix for the most recent 10-K, parsed
     directly from that filing's XBRL instance document. Returns an
     'available: False' result (never fabricated placeholder data) if the
@@ -253,12 +261,33 @@ async def build_business_mix(sec_client: SecClient, cik: int, submissions: dict[
         result["reason"] = "Not reported / unavailable - this filer did not tag segment or geographic revenue disaggregation in its XBRL."
         return result
 
-    business = _build_breakdown(facts, BUSINESS_AXES, annual_period_start, annual_period_end)
+    def reconciles(rows: list[dict[str, Any]]) -> bool:
+        if not rows or not total_revenue:
+            return bool(rows)  # no ground truth to check against - accept if non-empty
+        total = sum(r["value"] for r in rows)
+        return abs(total - total_revenue) <= total_revenue * _RECONCILE_TOLERANCE
+
+    # Prefer the true operating-segment breakdown (StatementBusinessSegmentsAxis)
+    # over the product/service category breakdown when both exist, since
+    # "segments" is what a 10-K's actual segment-reporting footnote means -
+    # but only keep whichever one actually adds up to real total revenue.
+    segment_breakdown = _build_breakdown(facts, BUSINESS_SEGMENT_AXIS, annual_period_start, annual_period_end)
+    product_breakdown = _build_breakdown(facts, PRODUCT_SERVICE_AXIS, annual_period_start, annual_period_end)
     geo = _build_breakdown(facts, GEOGRAPHIC_AXES, annual_period_start, annual_period_end)
+
+    if reconciles(segment_breakdown):
+        business = segment_breakdown
+    elif reconciles(product_breakdown):
+        business = product_breakdown
+    else:
+        business = []
+
+    if not reconciles(geo):
+        geo = []
 
     result["business_segments"] = business
     result["geographic"] = geo
     result["available"] = bool(business or geo)
     if not result["available"]:
-        result["reason"] = "Not reported / unavailable - no segment/geographic revenue breakdown found for the most recent fiscal year in this filer's XBRL."
+        result["reason"] = "Not reported / unavailable - this filer's segment/geographic XBRL tagging either wasn't found or didn't reconcile to total reported revenue for the most recent fiscal year."
     return result

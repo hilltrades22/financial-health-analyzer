@@ -122,9 +122,13 @@ async def _analyze_ticker(ticker_key: str, frequency: str = "annual") -> dict[st
     market_cap_val = valuation.get("market_cap", {}).get("value") if valuation.get("market_cap", {}).get("available") else None
     altman = compute_altman_z_score(company_facts, market_cap_val)
 
+    annual_revenue_val = next(
+        (t["revenue"] for t in timeline if t.get("period_end") == cf.annual.period_end and t.get("revenue") is not None),
+        None,
+    )
     try:
         business_mix = await build_business_mix(
-            _sec_client, cik, submissions, cf.annual.period_end, cf.annual.period_start
+            _sec_client, cik, submissions, cf.annual.period_end, cf.annual.period_start, annual_revenue_val
         )
     except Exception:
         # Business Mix is best-effort - never let a parsing edge case in one
