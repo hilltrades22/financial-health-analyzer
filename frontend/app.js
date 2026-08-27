@@ -870,6 +870,26 @@
         <p class="chart-sub">${data.trend_story ? "" : "Not enough historical SEC data to compute a score trend."}</p>
         <div class="chart-canvas-wrap short"><canvas id="chart-score-history"></canvas></div>
       </div>
+      <div class="chart-box">
+        <h3>Revenue, Net Income &amp; Free Cash Flow</h3>
+        <p class="chart-sub">Revenue and Net Income as bars, Free Cash Flow as a line - all from SEC-reported and FORGE-calculated (OCF - CapEx) figures.</p>
+        <div class="chart-canvas-wrap"><canvas id="chart-rev-earn-fcf"></canvas></div>
+      </div>
+      <div class="chart-box">
+        <h3>Cash vs. Total Debt</h3>
+        <p class="chart-sub">SEC-reported cash &amp; equivalents vs. total debt (short-term + long-term) at each period end.</p>
+        <div class="chart-canvas-wrap"><canvas id="chart-cash-debt"></canvas></div>
+      </div>
+      <div class="chart-box">
+        <h3>Margin Trends</h3>
+        <p class="chart-sub">Gross margin and net margin over time, FORGE-calculated from SEC-reported revenue, gross profit and net income.</p>
+        <div class="chart-canvas-wrap"><canvas id="chart-margins"></canvas></div>
+      </div>
+      <div class="chart-box">
+        <h3>Debt &amp; Lease Composition</h3>
+        <p class="chart-sub">Latest reported period - short-term debt, long-term debt, and operating/finance leases (leases already included in Total Liabilities, shown separately for composition only).</p>
+        <div class="chart-canvas-wrap short"><canvas id="chart-debt-composition"></canvas></div>
+      </div>
     `;
 
     el.querySelectorAll('input[type="checkbox"][data-metric]').forEach((cb) => {
@@ -881,8 +901,16 @@
 
     function activeTimelineFull() { return timelineCache[timelineFrequency] || data.timeline; }
 
-    buildTimeframeButtons("timeline-tf", activeTimelineFull(), (filtered) => drawTimelineChart(filtered));
+    function drawSecondaryVisuals(tl) {
+      drawRevEarnFcfChart(tl);
+      drawCashDebtChart(tl);
+      drawMarginsChart(tl);
+    }
+
+    buildTimeframeButtons("timeline-tf", activeTimelineFull(), (filtered) => { drawTimelineChart(filtered); drawSecondaryVisuals(filtered); });
     drawTimelineChart(filterTimeline(activeTimelineFull(), "MAX"));
+    drawSecondaryVisuals(filterTimeline(activeTimelineFull(), "MAX"));
+    drawDebtCompositionChart(data);
 
     el.querySelectorAll('#timeline-freq button[data-freq]').forEach((btn) => {
       btn.addEventListener("click", async () => {
@@ -895,12 +923,109 @@
         const tl = await fetchTimelineFrequency(freq);
         loadingEl.hidden = true;
         timelineFrequency = freq;
-        buildTimeframeButtons("timeline-tf", tl, (filtered) => drawTimelineChart(filtered));
+        buildTimeframeButtons("timeline-tf", tl, (filtered) => { drawTimelineChart(filtered); drawSecondaryVisuals(filtered); });
         drawTimelineChart(filterTimeline(tl, "MAX"));
+        drawSecondaryVisuals(filterTimeline(tl, "MAX"));
       });
     });
 
     drawScoreHistoryChart(data.historical_scores);
+  }
+
+  function timelineChartLabels(timeline) {
+    return timeline.map((t) => t.fiscal_period && t.fiscal_period !== "FY" ? `${t.fiscal_period} ${t.fiscal_year || ""}` : "FY" + (t.fiscal_year || t.period_end));
+  }
+
+  function drawRevEarnFcfChart(timeline) {
+    const el = document.getElementById("chart-rev-earn-fcf");
+    if (!el || !window.Chart || !timeline || !timeline.length) return;
+    const colors = chartColors();
+    const chart = getOrCreateChart(el, {
+      data: {
+        labels: timelineChartLabels(timeline),
+        datasets: [
+          { type: "bar", label: "Revenue", data: timeline.map((t) => t.revenue), backgroundColor: colors.brand + "cc" },
+          { type: "bar", label: "Net Income", data: timeline.map((t) => t.net_income), backgroundColor: colors.pass + "cc" },
+          { type: "line", label: "Free Cash Flow", data: timeline.map((t) => t.free_cash_flow), borderColor: cssVar("--accent"), backgroundColor: cssVar("--accent"), tension: 0.3, fill: false },
+        ],
+      },
+      options: {
+        plugins: { legend: { labels: { color: colors.text } }, tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${fmtUsd(ctx.parsed.y)}` } } },
+        scales: { y: { ticks: { color: colors.muted, callback: (v) => fmtUsd(v) }, grid: { color: colors.border } }, x: { ticks: { color: colors.text }, grid: { display: false } } },
+      },
+    });
+  }
+
+  function drawCashDebtChart(timeline) {
+    const el = document.getElementById("chart-cash-debt");
+    if (!el || !window.Chart || !timeline || !timeline.length) return;
+    const colors = chartColors();
+    const chart = getOrCreateChart(el, {
+      type: "bar",
+      data: {
+        labels: timelineChartLabels(timeline),
+        datasets: [
+          { label: "Cash", data: timeline.map((t) => t.cash), backgroundColor: colors.pass + "cc" },
+          { label: "Total Debt", data: timeline.map((t) => t.total_debt), backgroundColor: colors.fail + "cc" },
+        ],
+      },
+      options: {
+        plugins: { legend: { labels: { color: colors.text } }, tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${fmtUsd(ctx.parsed.y)}` } } },
+        scales: { y: { ticks: { color: colors.muted, callback: (v) => fmtUsd(v) }, grid: { color: colors.border } }, x: { ticks: { color: colors.text }, grid: { display: false } } },
+      },
+    });
+  }
+
+  function drawMarginsChart(timeline) {
+    const el = document.getElementById("chart-margins");
+    if (!el || !window.Chart || !timeline || !timeline.length) return;
+    const colors = chartColors();
+    const chart = getOrCreateChart(el, {
+      type: "line",
+      data: {
+        labels: timelineChartLabels(timeline),
+        datasets: [
+          { label: "Gross Margin %", data: timeline.map((t) => t.gross_margin_pct), borderColor: cssVar("--accent"), backgroundColor: cssVar("--accent"), tension: 0.3, fill: false },
+          { label: "Net Margin %", data: timeline.map((t) => t.net_margin_pct), borderColor: colors.brand, backgroundColor: colors.brand, tension: 0.3, fill: false },
+        ],
+      },
+      options: {
+        plugins: { legend: { labels: { color: colors.text } }, tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y == null ? NA : ctx.parsed.y.toFixed(1) + "%"}` } } },
+        scales: { y: { ticks: { color: colors.muted, callback: (v) => v + "%" }, grid: { color: colors.border } }, x: { ticks: { color: colors.text }, grid: { display: false } } },
+      },
+    });
+  }
+
+  function drawDebtCompositionChart(data) {
+    const el = document.getElementById("chart-debt-composition");
+    if (!el || !window.Chart) return;
+    const qf = data.quarterly_facts;
+    const lease = data.lease_summary;
+    const parts = [
+      { label: "Short-Term Debt", value: qf.short_term_debt.available ? qf.short_term_debt.value : 0 },
+      { label: "Long-Term Debt", value: qf.long_term_debt.available ? qf.long_term_debt.value : 0 },
+      { label: "Operating Leases", value: (qf.operating_lease_current.available ? qf.operating_lease_current.value : 0) + (qf.operating_lease_noncurrent.available ? qf.operating_lease_noncurrent.value : 0) },
+      { label: "Finance Leases", value: (qf.finance_lease_current.available ? qf.finance_lease_current.value : 0) + (qf.finance_lease_noncurrent.available ? qf.finance_lease_noncurrent.value : 0) },
+    ].filter((p) => p.value > 0);
+    if (!parts.length) {
+      el.parentElement.innerHTML = `<p>${NA} — no short/long-term debt or lease figures were found in this company's SEC filings.</p>`;
+      return;
+    }
+    const colors = chartColors();
+    const palette = [colors.fail, colors.watch, cssVar("--accent"), colors.brand, colors.pass];
+    const chart = getOrCreateChart(el, {
+      type: "doughnut",
+      data: {
+        labels: parts.map((p) => p.label),
+        datasets: [{ data: parts.map((p) => p.value), backgroundColor: parts.map((_, i) => palette[i % palette.length]) }],
+      },
+      options: {
+        plugins: {
+          legend: { position: "right", labels: { color: colors.text } },
+          tooltip: { callbacks: { label: (ctx) => { const total = parts.reduce((s, p) => s + p.value, 0); const pct = total ? (ctx.parsed / total * 100).toFixed(1) : "0.0"; return `${ctx.label}: ${fmtUsd(ctx.parsed)} (${pct}%)`; } } },
+        },
+      },
+    });
   }
 
   let lastTimelineFilter = null;
