@@ -10,6 +10,7 @@ result says so explicitly rather than guessing.
 """
 from __future__ import annotations
 
+import datetime
 import re
 from typing import Any, Optional
 from xml.etree import ElementTree as ET
@@ -65,19 +66,35 @@ def _clean_member(member: str) -> str:
 
 
 def find_latest_10k(submissions: dict[str, Any]) -> Optional[dict[str, Any]]:
+    filings = find_10k_filings(submissions)
+    return filings[0] if filings else None
+
+
+def find_10k_filings(submissions: dict[str, Any], limit: int = 3) -> list[dict[str, Any]]:
+    """Most recent 10-K filings, newest first. Used so that if the very
+    latest 10-K's XBRL instance document isn't yet fully available from SEC
+    EDGAR's static file server (this happens for filings filed very
+    recently - the index.json can briefly list only a handful of index/
+    header files before the full document set is published), we can fall
+    back to the prior year's 10-K rather than showing nothing. Any fallback
+    used is clearly labeled with its own real filing date/period - never
+    silently presented as the latest year's data."""
     recent = (submissions.get("filings") or {}).get("recent") or {}
     forms = recent.get("form") or []
     accessions = recent.get("accessionNumber") or []
     docs = recent.get("primaryDocument") or []
     dates = recent.get("filingDate") or []
+    out = []
     for i, form in enumerate(forms):
         if form == "10-K":
-            return {
+            out.append({
                 "accessionNumber": accessions[i],
                 "primaryDocument": docs[i] if i < len(docs) else None,
                 "filingDate": dates[i] if i < len(dates) else None,
-            }
-    return None
+            })
+            if len(out) >= limit:
+                break
+    return out
 
 
 def _pick_instance_filename(index_json: dict[str, Any]) -> Optional[str]:
@@ -188,6 +205,31 @@ def _drop_aggregate_members(by_member: dict[str, float]) -> dict[str, float]:
     return {l: v for l, v in by_member.items() if l not in to_drop}
 
 
+def _infer_annual_period(facts: list[dict[str, Any]]) -> tuple[Optional[str], Optional[str]]:
+    """When we fall back to an older 10-K (see find_10k_filings), we don't
+    have that filing's own fiscal-year start/end handed to us - infer it
+    from the parsed facts themselves: the most common ~1-year (350-380 day)
+    duration among the dimensional contexts, preferring the latest end
+    date. Real data only - derived from the filing's own XBRL contexts."""
+    counts: dict[tuple[str, str], int] = {}
+    for f in facts:
+        ctx = f["context"]
+        start, end = ctx.get("start"), ctx.get("end")
+        if not start or not end:
+            continue
+        try:
+            days = (datetime.date.fromisoformat(end) - datetime.date.fromisoformat(start)).days
+        except ValueError:
+            continue
+        if 350 <= days <= 380:
+            counts[(start, end)] = counts.get((start, end), 0) + 1
+    if not counts:
+        return None, None
+    # Prefer the most frequently tagged annual period; break ties by latest end date.
+    best = sorted(counts.items(), key=lambda kv: (kv[1], kv[0][1]), reverse=True)[0][0]
+    return best[0], best[1]
+
+
 def _build_breakdown(facts: list[dict[str, Any]], axes: set[str], target_start: Optional[str], target_end: Optional[str]) -> list[dict[str, Any]]:
     by_member: dict[str, float] = {}
     for f in facts:
@@ -231,63 +273,95 @@ async def build_business_mix(sec_client: SecClient, cik: int, submissions: dict[
         result["reason"] = "Not reported / unavailable - no annual period to match segment data against."
         return result
 
-    filing = find_latest_10k(submissions)
-    if not filing or not filing.get("accessionNumber"):
+    candidates = find_10k_filings(submissions, limit=3)
+    if not candidates:
         result["reason"] = "Not reported / unavailable - no 10-K filing found."
         return result
-    accession_nodash = filing["accessionNumber"].replace("-", "")
-    result["filing"] = {"accession_number": filing["accessionNumber"], "filing_date": filing.get("filingDate"), "form": "10-K"}
 
-    try:
-        index_json = await sec_client.get_filing_index(cik, accession_nodash)
-        instance_name = _pick_instance_filename(index_json)
-        if not instance_name:
-            items_dbg = (index_json.get("directory") or {}).get("item") or []
-            names_dbg = [i.get("name") for i in items_dbg][:10]
-            result["reason"] = f"Not reported / unavailable - could not locate an XBRL instance document in this filing (names: {names_dbg})."
-            return result
-        raw = await sec_client.get_filing_file(cik, accession_nodash, instance_name)
-        root = ET.fromstring(raw)
-    except (SecUnavailableError, TickerNotFoundError, ET.ParseError) as exc:
-        result["reason"] = f"Not reported / unavailable - could not parse this filing's XBRL instance document ({exc})."
-        return result
-    except Exception as exc:  # noqa: BLE001 - never let one filer's quirk break the whole analysis
-        result["reason"] = f"Not reported / unavailable - unexpected error reading this filing's XBRL instance document ({type(exc).__name__}: {exc})."
-        return result
-
-    contexts = _parse_contexts(root)
-    facts = _parse_facts(root, contexts)
-    if not facts:
-        result["reason"] = "Not reported / unavailable - this filer did not tag segment or geographic revenue disaggregation in its XBRL."
-        return result
-
-    def reconciles(rows: list[dict[str, Any]]) -> bool:
-        if not rows or not total_revenue:
+    def reconciles(rows: list[dict[str, Any]], revenue: Optional[float]) -> bool:
+        if not rows or not revenue:
             return bool(rows)  # no ground truth to check against - accept if non-empty
         total = sum(r["value"] for r in rows)
-        return abs(total - total_revenue) <= total_revenue * _RECONCILE_TOLERANCE
+        return abs(total - revenue) <= revenue * _RECONCILE_TOLERANCE
 
-    # Prefer the true operating-segment breakdown (StatementBusinessSegmentsAxis)
-    # over the product/service category breakdown when both exist, since
-    # "segments" is what a 10-K's actual segment-reporting footnote means -
-    # but only keep whichever one actually adds up to real total revenue.
-    segment_breakdown = _build_breakdown(facts, BUSINESS_SEGMENT_AXIS, annual_period_start, annual_period_end)
-    product_breakdown = _build_breakdown(facts, PRODUCT_SERVICE_AXIS, annual_period_start, annual_period_end)
-    geo = _build_breakdown(facts, GEOGRAPHIC_AXES, annual_period_start, annual_period_end)
+    last_reason = None
+    for idx, filing in enumerate(candidates):
+        is_latest = idx == 0
+        accession_nodash = filing["accessionNumber"].replace("-", "")
 
-    if reconciles(segment_breakdown):
-        business = segment_breakdown
-    elif reconciles(product_breakdown):
-        business = product_breakdown
-    else:
-        business = []
+        try:
+            index_json = await sec_client.get_filing_index(cik, accession_nodash)
+            instance_name = _pick_instance_filename(index_json)
+            if not instance_name:
+                items_dbg = (index_json.get("directory") or {}).get("item") or []
+                names_dbg = [i.get("name") for i in items_dbg][:10]
+                last_reason = f"Not reported / unavailable - could not locate an XBRL instance document in this filing (names: {names_dbg})."
+                continue  # this filing's static files aren't fully published yet - try the prior year's 10-K
+            raw = await sec_client.get_filing_file(cik, accession_nodash, instance_name)
+            root = ET.fromstring(raw)
+        except (SecUnavailableError, TickerNotFoundError, ET.ParseError) as exc:
+            last_reason = f"Not reported / unavailable - could not parse this filing's XBRL instance document ({exc})."
+            continue
+        except Exception as exc:  # noqa: BLE001 - never let one filer's quirk break the whole analysis
+            last_reason = f"Not reported / unavailable - unexpected error reading this filing's XBRL instance document ({type(exc).__name__}: {exc})."
+            continue
 
-    if not reconciles(geo):
-        geo = []
+        contexts = _parse_contexts(root)
+        facts = _parse_facts(root, contexts)
+        if not facts:
+            last_reason = "Not reported / unavailable - this filer did not tag segment or geographic revenue disaggregation in its XBRL."
+            continue
 
-    result["business_segments"] = business
-    result["geographic"] = geo
-    result["available"] = bool(business or geo)
-    if not result["available"]:
-        result["reason"] = "Not reported / unavailable - this filer's segment/geographic XBRL tagging either wasn't found or didn't reconcile to total reported revenue for the most recent fiscal year."
+        if is_latest:
+            period_start, period_end = annual_period_start, annual_period_end
+            revenue_for_check = total_revenue
+        else:
+            # Falling back to an older 10-K than the one used for the rest of
+            # the analysis: infer that filing's own fiscal year from its XBRL
+            # rather than reusing the latest year's period/revenue, and don't
+            # require reconciliation against a revenue figure that belongs to
+            # a different fiscal year.
+            period_start, period_end = _infer_annual_period(facts)
+            revenue_for_check = None
+            if not period_end:
+                last_reason = "Not reported / unavailable - could not determine this filing's fiscal year from its XBRL."
+                continue
+
+        # Prefer the true operating-segment breakdown (StatementBusinessSegmentsAxis)
+        # over the product/service category breakdown when both exist, since
+        # "segments" is what a 10-K's actual segment-reporting footnote means -
+        # but only keep whichever one actually adds up to real total revenue.
+        segment_breakdown = _build_breakdown(facts, BUSINESS_SEGMENT_AXIS, period_start, period_end)
+        product_breakdown = _build_breakdown(facts, PRODUCT_SERVICE_AXIS, period_start, period_end)
+        geo = _build_breakdown(facts, GEOGRAPHIC_AXES, period_start, period_end)
+
+        if reconciles(segment_breakdown, revenue_for_check):
+            business = segment_breakdown
+        elif reconciles(product_breakdown, revenue_for_check):
+            business = product_breakdown
+        else:
+            business = []
+
+        if not reconciles(geo, revenue_for_check):
+            geo = []
+
+        if not (business or geo):
+            last_reason = "Not reported / unavailable - this filer's segment/geographic XBRL tagging either wasn't found or didn't reconcile to total reported revenue for that fiscal year."
+            continue
+
+        result["filing"] = {"accession_number": filing["accessionNumber"], "filing_date": filing.get("filingDate"), "form": "10-K"}
+        result["period_end"] = period_end
+        result["business_segments"] = business
+        result["geographic"] = geo
+        result["available"] = True
+        if not is_latest:
+            result["reason"] = (
+                f"Note: the most recent 10-K's XBRL instance document was not yet fully published by SEC EDGAR "
+                f"at analysis time, so this shows real reported segment data from the prior 10-K "
+                f"(filed {filing.get('filingDate')}, fiscal year ended {period_end}) instead."
+            )
+        return result
+
+    result["reason"] = last_reason or "Not reported / unavailable - segment data could not be parsed for this company."
+    result["filing"] = {"accession_number": candidates[0]["accessionNumber"], "filing_date": candidates[0].get("filingDate"), "form": "10-K"}
     return result
