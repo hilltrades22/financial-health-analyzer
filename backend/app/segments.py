@@ -234,7 +234,8 @@ async def build_business_mix(sec_client: SecClient, cik: int, submissions: dict[
         index_json = await sec_client.get_filing_index(cik, accession_nodash)
         instance_name = _pick_instance_filename(index_json)
         if not instance_name:
-            result["reason"] = "Not reported / unavailable - could not locate an XBRL instance document in this filing."
+            item_count = len((index_json.get("directory") or {}).get("item") or [])
+            result["reason"] = f"Not reported / unavailable - could not locate an XBRL instance document in this filing (index had {item_count} items; keys={list(index_json.keys())})."
             return result
         raw = await sec_client.get_filing_file(cik, accession_nodash, instance_name)
         root = ET.fromstring(raw)
