@@ -33,6 +33,7 @@ from .sec_client import (
     TickerNotFoundError,
     SEC_USER_AGENT,
 )
+from .segments import build_business_mix
 from .story import build_financial_story
 
 app = FastAPI(title="FORGE Financial Intelligence", version="2.0.0")
@@ -121,6 +122,15 @@ async def _analyze_ticker(ticker_key: str, frequency: str = "annual") -> dict[st
     market_cap_val = valuation.get("market_cap", {}).get("value") if valuation.get("market_cap", {}).get("available") else None
     altman = compute_altman_z_score(company_facts, market_cap_val)
 
+    try:
+        business_mix = await build_business_mix(
+            _sec_client, cik, submissions, cf.annual.period_end, cf.annual.period_start
+        )
+    except Exception:
+        # Business Mix is best-effort - never let a parsing edge case in one
+        # filer's XBRL take down the whole analysis.
+        business_mix = {"available": False, "reason": "Not reported / unavailable - segment data could not be parsed for this company.", "business_segments": [], "geographic": []}
+
     forge = compute_forge_score(score["overall_score"], piotroski, altman, valuation)
     grading = build_grading(forge, score, piotroski, valuation, altman)
 
@@ -164,6 +174,7 @@ async def _analyze_ticker(ticker_key: str, frequency: str = "annual") -> dict[st
         "valuation_history": valuation_history,
         "bull_base_bear": bull_base_bear,
         "market_price": price_info,
+        "business_mix": business_mix,
         "historical_scores": historical_scores,
         "trend_story": trend_story,
         "timeline": timeline,

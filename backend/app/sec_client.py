@@ -128,6 +128,30 @@ class SecClient:
             raise SecUnavailableError(f"SEC EDGAR submissions API returned unexpected {resp.status_code}")
         return resp.json()
 
+    async def get_filing_index(self, cik: int, accession_nodash: str) -> dict[str, Any]:
+        url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{accession_nodash}/index.json"
+        headers = _headers().copy()
+        headers["Host"] = "www.sec.gov"
+        try:
+            resp = await self._client.get(url, headers=headers, timeout=_DEFAULT_TIMEOUT)
+        except httpx.HTTPError as exc:
+            raise SecUnavailableError(f"Could not reach SEC EDGAR filing index: {exc}") from exc
+        if resp.status_code != 200:
+            raise SecUnavailableError(f"SEC EDGAR filing index returned {resp.status_code}")
+        return resp.json()
+
+    async def get_filing_file(self, cik: int, accession_nodash: str, filename: str) -> bytes:
+        url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{accession_nodash}/{filename}"
+        headers = _headers().copy()
+        headers["Host"] = "www.sec.gov"
+        try:
+            resp = await self._client.get(url, headers=headers, timeout=httpx.Timeout(30.0, connect=10.0))
+        except httpx.HTTPError as exc:
+            raise SecUnavailableError(f"Could not reach SEC EDGAR filing file: {exc}") from exc
+        if resp.status_code != 200:
+            raise SecUnavailableError(f"SEC EDGAR filing file returned {resp.status_code}")
+        return resp.content
+
     async def get_company_facts(self, cik: int) -> dict[str, Any]:
         cik10 = str(cik).zfill(10)
         url = COMPANY_FACTS_URL.format(cik10=cik10)
