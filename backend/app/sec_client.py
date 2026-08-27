@@ -138,7 +138,10 @@ class SecClient:
             raise SecUnavailableError(f"Could not reach SEC EDGAR filing index: {exc}") from exc
         if resp.status_code != 200:
             raise SecUnavailableError(f"SEC EDGAR filing index returned {resp.status_code}")
-        return resp.json()
+        try:
+            return resp.json()
+        except ValueError as exc:
+            raise SecUnavailableError(f"SEC EDGAR filing index returned non-JSON content: {exc}") from exc
 
     async def get_filing_file(self, cik: int, accession_nodash: str, filename: str) -> bytes:
         url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{accession_nodash}/{filename}"

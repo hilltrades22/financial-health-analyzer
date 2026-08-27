@@ -81,12 +81,23 @@ def _pick_instance_filename(index_json: dict[str, Any]) -> Optional[str]:
             continue
         if any(name.lower().endswith(suf) for suf in _LINKBASE_SUFFIXES):
             continue
-        if name.lower() == "filingsummary.xml":
+        if name.lower() in ("filingsummary.xml", "metalinks.json"):
             continue
-        candidates.append(name)
-    # Prefer the shortest plausible instance filename (linkbases tend to be longer).
-    candidates.sort(key=len)
-    return candidates[0] if candidates else None
+        try:
+            size = int(item.get("size") or 0)
+        except (TypeError, ValueError):
+            size = 0
+        candidates.append((name, size))
+    if not candidates:
+        return None
+    # The real XBRL instance document is, by a wide margin, the largest
+    # remaining .xml file (it carries every tagged fact in the filing) and
+    # modern filers name it "<ticker>-<date>_htm.xml" (inline XBRL); older
+    # filings sometimes omit the "_htm" suffix. Prefer that naming, then
+    # fall back to simply the largest file so a naming-convention change
+    # from any given filer doesn't silently break this.
+    candidates.sort(key=lambda c: (0 if c[0].lower().endswith("_htm.xml") else 1, -c[1]))
+    return candidates[0][0]
 
 
 def _parse_contexts(root: ET.Element) -> dict[str, dict[str, Any]]:
@@ -229,6 +240,9 @@ async def build_business_mix(sec_client: SecClient, cik: int, submissions: dict[
         root = ET.fromstring(raw)
     except (SecUnavailableError, TickerNotFoundError, ET.ParseError) as exc:
         result["reason"] = f"Not reported / unavailable - could not parse this filing's XBRL instance document ({exc})."
+        return result
+    except Exception as exc:  # noqa: BLE001 - never let one filer's quirk break the whole analysis
+        result["reason"] = f"Not reported / unavailable - unexpected error reading this filing's XBRL instance document ({type(exc).__name__}: {exc})."
         return result
 
     contexts = _parse_contexts(root)
