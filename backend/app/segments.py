@@ -52,6 +52,7 @@ def _clean_member(member: str) -> str:
     # CamelCase -> spaced words, but keep a leading lowercase-style brand
     # prefix (iPhone, iPad, ...) glued to its following capital.
     spaced = re.sub(r"(?<!^)(?<![A-Z])(?=[A-Z])", " ", name).strip()
+    spaced = re.sub(r"\bHomeand\b", "Home and", spaced)  # Apple's own tag name lacks a space here
     return spaced or name or member
 
 
@@ -138,6 +139,36 @@ def _parse_facts(root: ET.Element, contexts: dict[str, dict[str, Any]]) -> list[
     return facts
 
 
+def _drop_aggregate_members(by_member: dict[str, float]) -> dict[str, float]:
+    """Some filers (e.g. Apple) tag both an umbrella member ('Product',
+    'Service') AND its individual children (iPhone, Mac, iPad, ...) on the
+    very same axis. Left alone, that double-counts revenue and produces
+    percentages that sum to well over 100%. Detect any member whose value
+    is (within a small tolerance) exactly the sum of two or more OTHER
+    members, and drop it as a roll-up rather than a real line item."""
+    import itertools
+
+    labels = list(by_member.keys())
+    if len(labels) < 3:
+        return by_member
+    to_drop = set()
+    for i, li in enumerate(labels):
+        vi = by_member[li]
+        others = [lj for j, lj in enumerate(labels) if j != i]
+        found = False
+        for r in range(2, len(others) + 1):
+            for combo in itertools.combinations(others, r):
+                s = sum(by_member[c] for c in combo)
+                if abs(s - vi) <= max(1.0, vi * 0.005):
+                    found = True
+                    break
+            if found:
+                break
+        if found:
+            to_drop.add(li)
+    return {l: v for l, v in by_member.items() if l not in to_drop}
+
+
 def _build_breakdown(facts: list[dict[str, Any]], axes: set[str], target_start: Optional[str], target_end: Optional[str]) -> list[dict[str, Any]]:
     by_member: dict[str, float] = {}
     for f in facts:
@@ -153,6 +184,7 @@ def _build_breakdown(facts: list[dict[str, Any]], axes: set[str], target_start: 
         label = _clean_member(member)
         # Prefer the most "whole" revenue tag if multiple report the same member.
         by_member[label] = max(by_member.get(label, 0.0), f["value"])
+    by_member = _drop_aggregate_members(by_member)
     total = sum(by_member.values())
     if not by_member or total <= 0:
         return []
