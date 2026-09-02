@@ -46,7 +46,8 @@ TRANSACTION_CODES: dict[str, dict[str, str]] = {
           "note": "Shares returned to or cancelled by the company."},
 }
 
-_MAX_FILINGS = 12          # keep the request budget bounded
+_MAX_FILINGS = 6           # keep the request budget bounded
+_MAX_CONCURRENT = 3        # be a considerate SEC client while still finishing quickly
 _FETCH_TIMEOUT_S = 20.0
 
 
@@ -212,29 +213,36 @@ async def build_insider_activity(sec_client: SecClient, cik: int,
         result["reason"] = "Unavailable - no Form 4 insider filings found for this company on SEC EDGAR."
         return result
 
-    transactions: list[dict[str, Any]] = []
-    examined = 0
-    for filing in filings:
+    # Each filing needs two round-trips to SEC (index, then the XML). Done
+    # one after another that is slow enough to dominate the whole analysis,
+    # so they run concurrently under a small semaphore - fast for the user,
+    # still a considerate number of simultaneous requests to SEC.
+    gate = asyncio.Semaphore(_MAX_CONCURRENT)
+
+    async def _one(filing: dict[str, Any]) -> list[dict[str, Any]]:
         accession = (filing.get("accession") or "").replace("-", "")
         if not accession:
-            continue
-        try:
-            index_json = await sec_client.get_filing_index(cik, accession)
-            items = (index_json.get("directory") or {}).get("item") or []
-            # The raw ownership XML, not the XSL-rendered viewer document.
-            name = next((i.get("name") for i in items
-                         if str(i.get("name", "")).lower().endswith(".xml")
-                         and "xsl" not in str(i.get("name", "")).lower()), None)
-            if not name:
-                continue
-            raw = await sec_client.get_filing_file(cik, accession, name)
-            parsed = await asyncio.to_thread(parse_form4, raw, filing.get("filing_date"))
-            transactions.extend(parsed)
-            examined += 1
-        except (SecUnavailableError, TickerNotFoundError, ET.ParseError):
-            continue
-        except Exception:  # noqa: BLE001 - one malformed filing must not break the rest
-            continue
+            return []
+        async with gate:
+            try:
+                index_json = await sec_client.get_filing_index(cik, accession)
+                items = (index_json.get("directory") or {}).get("item") or []
+                # The raw ownership XML, not the XSL-rendered viewer document.
+                name = next((i.get("name") for i in items
+                             if str(i.get("name", "")).lower().endswith(".xml")
+                             and "xsl" not in str(i.get("name", "")).lower()), None)
+                if not name:
+                    return []
+                raw = await sec_client.get_filing_file(cik, accession, name)
+                return parse_form4(raw, filing.get("filing_date"))
+            except (SecUnavailableError, TickerNotFoundError, ET.ParseError):
+                return []
+            except Exception:  # noqa: BLE001 - one malformed filing must not break the rest
+                return []
+
+    parsed_lists = await asyncio.gather(*(_one(f) for f in filings))
+    transactions: list[dict[str, Any]] = [t for lst in parsed_lists for t in lst]
+    examined = sum(1 for lst in parsed_lists if lst)
 
     result["filings_examined"] = examined
     if not transactions:
