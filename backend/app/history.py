@@ -122,10 +122,39 @@ def build_financial_timeline(company_facts: dict[str, Any], max_years: int = 10,
     series_fn = N.quarterly_series if frequency == "quarterly" else N.annual_series
     max_points = max_years * 4 if frequency == "quarterly" else max_years
 
+    # The set of periods to plot must not depend on any single concept.
+    # Anchoring solely on retained earnings meant that a filer which does not
+    # tag RetainedEarningsAccumulatedDeficit - common for REITs, which
+    # distribute their income rather than retaining it - produced a
+    # completely empty timeline. Take the union of periods across the core
+    # concepts instead, so a company appears if it reports ANY of them.
     re_series = series_fn(company_facts, N.RETAINED_EARNINGS_TAGS, duration=False)
-    if not re_series:
+    anchor_specs = [
+        (N.RETAINED_EARNINGS_TAGS, False),
+        (revenue_tags, True),
+        (net_income_tags, True),
+        (N.TOTAL_EQUITY_TAGS, False),
+        (N.ASSETS_TAGS, False),
+        (N.OPERATING_CASH_FLOW_TAGS, True),
+    ]
+    period_set: set[str] = set()
+    for tags, duration in anchor_specs:
+        for e in series_fn(company_facts, tags, duration=duration):
+            end = e.get("end")
+            if end:
+                period_set.add(end)
+    if not period_set:
         return []
-    periods = [e.get("end") for e in re_series][:max_points]
+    periods = sorted(period_set, reverse=True)[:max_points]
+
+    # Fiscal year / period labels come from whichever concept reported that
+    # period, rather than from one privileged series' positional index.
+    fiscal_labels: dict[str, tuple] = {}
+    for tags, duration in anchor_specs:
+        for e in series_fn(company_facts, tags, duration=duration):
+            end = e.get("end")
+            if end and end not in fiscal_labels and e.get("fy"):
+                fiscal_labels[end] = (e.get("fy"), e.get("fp"))
 
     def by_period(tags, duration):
         s = series_fn(company_facts, tags, duration=duration)
@@ -178,8 +207,8 @@ def build_financial_timeline(company_facts: dict[str, Any], max_years: int = 10,
         net_margin = (net_income / revenue * 100) if (net_income is not None and revenue) else None
         gross_margin = (gross_profit / revenue * 100) if (gross_profit is not None and revenue) else None
         timeline.append({
-            "fiscal_year": re_series[i].get("fy"),
-            "fiscal_period": re_series[i].get("fp"),
+            "fiscal_year": fiscal_labels.get(period_end, (None, None))[0],
+            "fiscal_period": fiscal_labels.get(period_end, (None, None))[1],
             "period_end": period_end,
             "revenue": revenue,
             "net_income": net_income,

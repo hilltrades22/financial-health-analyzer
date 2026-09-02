@@ -431,6 +431,37 @@ def build_quarterly_snapshot(company_facts: dict[str, Any]) -> QuarterlySnapshot
     snap.long_term_debt = _latest_instant(company_facts, LONG_TERM_DEBT_TAGS, QUARTERLY_ELIGIBLE_FORMS)
     snap.total_liabilities = _latest_instant(company_facts, TOTAL_LIABILITIES_TAGS, QUARTERLY_ELIGIBLE_FORMS)
     snap.total_equity = _latest_instant(company_facts, TOTAL_EQUITY_TAGS, QUARTERLY_ELIGIBLE_FORMS)
+
+    # Some large filers (Amazon among them) never tag a total "Liabilities"
+    # line, even though they report both total assets and total equity. The
+    # accounting identity Assets = Liabilities + Equity makes the missing
+    # figure exactly derivable from two facts the filer DID report, so
+    # deriving it is arithmetic on real data rather than an estimate. A
+    # reported value always wins; the derived one is flagged so the UI and
+    # the audit trail can say where it came from.
+    if not snap.total_liabilities.available:
+        assets = _latest_instant(company_facts, ASSETS_TAGS, QUARTERLY_ELIGIBLE_FORMS)
+        equity = snap.total_equity
+        if (assets.available and equity.available and assets.value is not None
+                and equity.value is not None and assets.period_end == equity.period_end):
+            snap.total_liabilities = FactValue(
+                value=assets.value - equity.value,
+                available=True,
+                period_end=assets.period_end,
+                fiscal_year=assets.fiscal_year,
+                fiscal_period=assets.fiscal_period,
+                form=assets.form,
+                concept=f"derived: {assets.concept} - {equity.concept}",
+                filed=assets.filed,
+                accn=assets.accn,
+                unit=assets.unit,
+                derived=True,
+                derivation=(
+                    "This filer does not report a total liabilities line in its XBRL. The value shown is "
+                    "total assets minus total equity for the same period end, which is the accounting "
+                    "identity Assets = Liabilities + Equity applied to two figures the company did report."
+                ),
+            )
     snap.treasury_stock = _latest_instant(company_facts, TREASURY_STOCK_TAGS, QUARTERLY_ELIGIBLE_FORMS)
     snap.preferred_stock = _latest_instant(company_facts, PREFERRED_STOCK_TAGS, QUARTERLY_ELIGIBLE_FORMS)
     snap.retained_earnings = _latest_instant(company_facts, RETAINED_EARNINGS_TAGS, QUARTERLY_ELIGIBLE_FORMS)

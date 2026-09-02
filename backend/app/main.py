@@ -25,9 +25,11 @@ from .market_data import (
 )
 from .normalize import build_company_financials, reporting_currency
 from .pillars import compute_forge_score
+from .providers import analyst_data, estimates_data, ownership_data, provider_status
 from .quality import compute_financial_quality, compute_piotroski_f_score
 from .risk import compute_altman_z_score
 from .scoring import score_company
+from .sector_rules import evaluate_with_sector
 from .sec_client import (
     SecClient,
     SecUnavailableError,
@@ -35,7 +37,7 @@ from .sec_client import (
     SEC_USER_AGENT,
 )
 from .segments import build_business_mix
-from .story import build_financial_story
+from .story import build_financial_story, build_story_sections
 
 app = FastAPI(title="FORGE Financial Intelligence", version="2.0.0")
 
@@ -127,6 +129,18 @@ async def _analyze_ticker(ticker_key: str, frequency: str = "annual") -> dict[st
     # Also carries the peer group that sector-aware interpretation keys off.
     classification = build_classification(submissions, market_cap_val)
 
+    # Re-run the health assessment with business-model awareness: rules that
+    # do not describe this kind of company become NOT_APPLICABLE (excluded
+    # from the score rather than failed) and peer-appropriate rules are added.
+    try:
+        sector_score = evaluate_with_sector(score, cf, company_facts, classification)
+    except Exception:  # noqa: BLE001 - never let sector logic break the base analysis
+        sector_score = None
+    if sector_score:
+        score = {**score, **sector_score}
+    story = build_financial_story(cf.name, cf.ticker, score, classification, valuation)
+    story_sections = build_story_sections(cf.name, cf.ticker, score, classification, valuation)
+
     annual_revenue_val = next(
         (t["revenue"] for t in timeline if t.get("period_end") == cf.annual.period_end and t.get("revenue") is not None),
         None,
@@ -189,6 +203,7 @@ async def _analyze_ticker(ticker_key: str, frequency: str = "annual") -> dict[st
         "grading": grading,
         "score": score,
         "financial_story": story,
+        "financial_story_sections": story_sections,
         "quality_metrics": quality_metrics,
         "piotroski": piotroski,
         "altman": altman,
@@ -197,6 +212,13 @@ async def _analyze_ticker(ticker_key: str, frequency: str = "annual") -> dict[st
         "bull_base_bear": bull_base_bear,
         "market_price": price_info,
         "business_mix": business_mix,
+        # Non-SEC market data, kept strictly separate from the SEC-based
+        # analysis. Unconfigured capabilities report themselves unavailable
+        # with a reason rather than returning empty values.
+        "market_providers": provider_status(),
+        "analyst": analyst_data(ticker_key),
+        "estimates": estimates_data(ticker_key),
+        "institutional_ownership": ownership_data(ticker_key),
         "historical_scores": historical_scores,
         "trend_story": trend_story,
         "timeline": timeline,

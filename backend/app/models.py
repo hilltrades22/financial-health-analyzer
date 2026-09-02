@@ -27,6 +27,11 @@ class FactValue:
     # foreign private issuer reporting in TWD must never have its figures
     # combined with a USD market price without saying so.
     unit: Optional[str] = None
+    # Set when a value was computed from other reported facts rather than
+    # read directly from the filing. A derived value is always labelled as
+    # such and never silently replaces a figure the filer did report.
+    derived: bool = False
+    derivation: Optional[str] = None
 
     @staticmethod
     def missing() -> "FactValue":
