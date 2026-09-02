@@ -374,3 +374,54 @@ body {
   padding: 8px 12px;
   border-radius: 4px;
 }
+
+/* --- Sector-aware rule engine ------------------------------------------ */
+.status-NOT_APPLICABLE { background: var(--na-bg); color: var(--muted); }
+.rule-NOT_APPLICABLE, .rule-UNAVAILABLE { opacity: 0.82; }
+.rule-card-head {
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 8px; margin-bottom: 6px;
+}
+.rule-tag {
+  font-size: 0.66rem; letter-spacing: 0.05em; text-transform: uppercase;
+  color: var(--muted); border: 1px solid var(--border);
+  padding: 1px 6px; border-radius: 3px;
+}
+.rule-tag-sector { color: var(--brand); border-color: var(--brand); }
+.rule-weight { font-size: 0.7rem; color: var(--muted); }
+.rule-weight-off { font-style: italic; }
+.rule-meta { font-size: 0.75rem; color: var(--muted); margin: 6px 0 0; }
+.rule-source { margin-top: 6px; font-size: 0.75rem; color: var(--muted); }
+.rule-source summary { cursor: pointer; }
+.rule-source p { margin: 4px 0 0; overflow-wrap: anywhere; }
+
+.sector-banner { border-left: 3px solid var(--brand); }
+.sector-stats {
+  display: flex; flex-wrap: wrap; gap: 18px; margin-top: 10px;
+  font-size: 0.85rem; color: var(--muted);
+}
+.sector-stats strong { color: var(--text); font-size: 1.05rem; }
+.section-note { font-size: 0.85rem; color: var(--muted); line-height: 1.55; margin: 6px 0 0; }
+
+/* --- Financial story --------------------------------------------------- */
+.story-sections { line-height: 1.65; }
+.story-overview { font-size: 1.02rem; margin: 0 0 14px; }
+.story-h {
+  font-size: 0.78rem; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--muted); margin: 18px 0 6px;
+}
+.story-list { margin: 0; padding-left: 20px; }
+.story-list li { margin-bottom: 7px; }
+.story-good li::marker { color: var(--pass); }
+.story-warn li::marker { color: var(--watch); }
+.story-gap li::marker { color: var(--muted); }
+.story-val {
+  font-variant-numeric: tabular-nums; color: var(--brand);
+  font-weight: 600; margin-left: 2px;
+}
+.story-p { margin: 0; color: var(--text); }
+
+@media (max-width: 640px) {
+  .sector-stats { gap: 12px; font-size: 0.8rem; }
+  .rule-card-head { flex-wrap: wrap; }
+}

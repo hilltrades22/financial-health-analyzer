@@ -160,7 +160,11 @@
   // ---------- Render orchestration ----------
   function render(data) {
     renderDashboard(data);
-    document.getElementById("financial-story").textContent = data.financial_story;
+    // Structured story when the API provides it, plain text as a fallback.
+    const storyEl = document.getElementById("financial-story");
+    const sectionsHtml = storySectionsHtml(data);
+    if (sectionsHtml) storyEl.innerHTML = sectionsHtml;
+    else storyEl.textContent = data.financial_story;
     document.getElementById("trend-story").textContent = data.trend_story || "";
     renderHealthTab(data);
     renderQualityTab(data);
@@ -290,12 +294,79 @@
 
   // ---------- Health tab ----------
   function ruleCard(r) {
-    return `<div class="kpi-card">
+    const label = r.status === "NOT_APPLICABLE" ? "NOT APPLICABLE" : r.status;
+    const meta = [];
+    if (r.threshold) meta.push(`Threshold: ${esc(r.threshold)}`);
+    if (r.period) meta.push(`Period: ${esc(r.period)}`);
+    if (r.currency) meta.push(`Currency: ${esc(r.currency)}`);
+    const tag = r.rule_type === "sector"
+      ? `<span class="rule-tag rule-tag-sector">Sector rule</span>`
+      : `<span class="rule-tag">Universal rule</span>`;
+    const weight = r.points_available > 0
+      ? `<span class="rule-weight">${r.points_available} pts</span>`
+      : `<span class="rule-weight rule-weight-off">not scored</span>`;
+    return `<div class="kpi-card rule-${r.status}">
+      <div class="rule-card-head">${tag}${weight}</div>
       <div class="kpi-label">${esc(r.name)}</div>
       <div class="kpi-value">${esc(r.value)}</div>
-      <span class="kpi-status status-${r.status}">${r.status}</span>
+      <span class="kpi-status status-${r.status}">${label}</span>
       <p class="kpi-explain">${esc(r.explanation)}</p>
+      ${meta.length ? `<p class="rule-meta">${meta.join(" &middot; ")}</p>` : ""}
       <p class="kpi-formula"><code>${esc(r.formula)}</code></p>
+      ${r.source ? `<details class="rule-source"><summary>Data source</summary><p>${esc(r.source)}</p></details>` : ""}
+    </div>`;
+  }
+
+  // Plain-English story, rendered from the structured sections the API
+  // returns (strengths / concerns / sector context / what is missing).
+  function storySectionsHtml(data) {
+    const s = data.financial_story_sections;
+    if (!s) return "";
+    const list = (items, cls) => items.length
+      ? `<ul class="story-list ${cls}">${items.map((x) => `<li><strong>${esc(x.rule)}</strong>${x.value ? ` <span class="story-val">${esc(x.value)}</span>` : ""} &mdash; ${esc(x.detail)}</li>`).join("")}</ul>`
+      : "";
+    const blocks = [];
+    blocks.push(`<p class="story-overview">${esc(s.overview)}</p>`);
+    if (s.strengths && s.strengths.length)
+      blocks.push(`<h4 class="story-h">What is working</h4>${list(s.strengths, "story-good")}`);
+    if (s.concerns && s.concerns.length)
+      blocks.push(`<h4 class="story-h">What needs attention</h4>${list(s.concerns, "story-warn")}`);
+    if (s.sector_context)
+      blocks.push(`<h4 class="story-h">Why this sector is read differently</h4><p class="story-p">${esc(s.sector_context)}</p>`);
+    if (s.data_gaps && s.data_gaps.length)
+      blocks.push(`<h4 class="story-h">What could not be assessed</h4><ul class="story-list story-gap">${s.data_gaps.map((g) => `<li>${esc(g)}</li>`).join("")}</ul>`);
+    return `<div class="story-sections">${blocks.join("")}</div>`;
+  }
+
+  // Market/investor sections have no configured provider. They are shown as
+  // explicitly unavailable rather than hidden, so the absence is visible.
+  function providerSectionHtml(data) {
+    const p = data.market_providers || {};
+    const sections = [
+      ["Analyst Consensus", "analyst", "Buy/Hold/Sell consensus, number of analysts"],
+      ["Price Target", "analyst", "Average price target and contributing analysts"],
+      ["EPS & Revenue Estimates", "estimates", "Forward EPS and revenue consensus"],
+      ["Institutional Ownership", "ownership", "Major holders and position changes"],
+    ];
+    const cards = sections.map(([title, key, desc]) => {
+      const prov = p[key] || {};
+      const status = prov.available
+        ? `<span class="kpi-status status-PASS">${esc(prov.provider || "Available")}</span>`
+        : `<span class="kpi-status status-UNAVAILABLE">Unavailable</span>`;
+      const reason = prov.available ? "" : `<p class="kpi-explain">${esc(prov.reason || "Unavailable — no provider configured.")}</p>`;
+      return `<div class="kpi-card">
+        <div class="kpi-label">${esc(title)}</div>
+        <div class="kpi-value">${prov.available ? "" : "&mdash;"}</div>
+        ${status}
+        <p class="kpi-formula">${esc(desc)}</p>
+        ${reason}
+      </div>`;
+    }).join("");
+    return `<div class="chart-box">
+      <h3>Analyst &amp; Investor Information</h3>
+      <p class="section-note">These figures come from market-data providers, not from SEC filings, and are kept
+      separate from the SEC-based financial-health analysis above.</p>
+      <div class="kpi-grid">${cards}</div>
     </div>`;
   }
 
@@ -323,9 +394,16 @@
     const rules = data.score.rules;
     const byId = {};
     rules.forEach((r) => (byId[r.id] = r));
-    const cats = ["Liquidity", "Debt & Leverage", "Retained Earnings", "Capital Structure", "Treasury Stock", "Lease Obligations", "Cash Generation", "Debt Service"];
+    // Preferred display order, then ANY other category the engine produced.
+    // Sector rules introduce categories (Profitability, Financial Risk,
+    // Business Quality, ...) that a fixed list would silently hide.
+    const preferredCats = ["Liquidity", "Debt & Leverage", "Capital Structure", "Retained Earnings",
+      "Profitability", "Cash Generation", "Debt Service", "Financial Risk", "Business Quality",
+      "Treasury Stock", "Lease Obligations"];
     const byCat = {};
     rules.forEach((r) => (byCat[r.category] = byCat[r.category] || []).push(r));
+    const cats = preferredCats.filter((c) => byCat[c])
+      .concat(Object.keys(byCat).filter((c) => !preferredCats.includes(c)).sort());
 
     const liq = byId.liquidity, de = byId.debt_to_equity;
     const cashDebtChart = `<div class="chart-box"><h3>Cash vs. Debt</h3><p class="chart-sub">Latest quarter balance-sheet snapshot</p>
@@ -343,7 +421,22 @@
       catHtml += `<h3 style="margin-top:24px">${cat}</h3><div class="metric-grid">${items.map(ruleCard).join("")}</div>`;
     });
 
-    el.innerHTML = `
+    const sc = data.score || {};
+    const naCount = (sc.not_applicable_rules || []).length;
+    const sectorBanner = sc.peer_group && sc.peer_group !== "general" ? `
+      <div class="chart-box sector-banner">
+        <h3>Analysed as: ${esc(sc.peer_group)}</h3>
+        <p class="section-note">${esc(sc.peer_group_note || "")}</p>
+        <div class="sector-stats">
+          <span><strong>${sc.universal_rule_count || 0}</strong> universal rules</span>
+          <span><strong>${sc.sector_rule_count || 0}</strong> sector rules</span>
+          <span><strong>${naCount}</strong> set aside as not applicable</span>
+          <span><strong>${sc.data_confidence_pct != null ? sc.data_confidence_pct + "%" : "—"}</strong> data confidence</span>
+        </div>
+        ${sc.data_confidence_note ? `<p class="section-note">${esc(sc.data_confidence_note)}</p>` : ""}
+      </div>` : "";
+
+    el.innerHTML = sectorBanner + `
       <div class="chart-box">
         <h3>Liquidity &amp; Leverage Gauges</h3>
         <div class="gauge-row">
@@ -354,6 +447,7 @@
       ${cashDebtChart}
       ${leaseChart}
       ${catHtml}
+      ${providerSectionHtml(data)}
     `;
 
     // Gauges: liquidity pass=100/fail=20 visual proxy; D/E inverse-scaled
