@@ -128,7 +128,9 @@ def build_classification(submissions: dict[str, Any], market_cap: Optional[float
     sector = sector_for_sic(sic)
     sub_industry, peer_group = sub_industry_for_sic(sic)
 
-    exchanges = [e for e in (submissions.get("exchanges") or []) if e]
+    # A company with several listed share classes repeats the same exchange
+    # once per class (Alphabet returns Nasdaq four times) - list each once.
+    exchanges = list(dict.fromkeys(e for e in (submissions.get("exchanges") or []) if e))
     addresses = submissions.get("addresses") or {}
     business = addresses.get("business") or {}
     mailing = addresses.get("mailing") or {}

@@ -207,6 +207,17 @@ def _latest_annual(company_facts: dict[str, Any], tags: list[str], duration: boo
     return fact_from_entry(series[0]) if series else None
 
 
+# Annual-report forms filed by foreign private issuers. A company filing
+# these is normally listed in the US through an ADR, and one ADR represents
+# some ratio of ordinary shares (5:1 for TSM, 1:1 for others, and the ratio
+# can change). SEC's XBRL reports the ORDINARY share count, while the market
+# quote is per ADR - multiplying one by the other produces a market cap and
+# multiples that are wrong by exactly the ADR ratio. SEC does not publish
+# that ratio in XBRL, so rather than guess it (or hardcode it per ticker) we
+# mark every price-based figure unavailable and say why.
+_FOREIGN_ISSUER_FORMS = {"20-F", "20-F/A", "40-F", "40-F/A"}
+
+
 def compute_valuation(company_facts: dict[str, Any], price_info: dict[str, Any],
                        total_debt: Optional[float], cash: Optional[float],
                        key_stats: Optional[dict[str, Any]] = None) -> dict[str, Any]:
@@ -274,6 +285,25 @@ def compute_valuation(company_facts: dict[str, Any], price_info: dict[str, Any],
     if shares is None or not shares.available or not shares.value:
         out["market_cap"] = {"available": False, "display": NOT_REPORTED}
         out["note"] = "Shares outstanding not found in SEC XBRL data, so market cap cannot be computed."
+        return out
+
+    # Guard against comparing an ADR price with an ordinary-share count.
+    if shares.form in _FOREIGN_ISSUER_FORMS:
+        reason = (
+            f"This company is a foreign private issuer (its share count comes from a {shares.form} filing). "
+            f"SEC reports {shares.value:,.0f} ordinary shares, but the US quote is per depositary share (ADR), "
+            f"and the ratio of ordinary shares per ADR is not published in SEC XBRL. Multiplying the two would "
+            f"overstate market cap and every multiple by that ratio, so these are reported as unavailable rather "
+            f"than computed from mismatched units."
+        )
+        for key in ("market_cap", "pe_ratio", "eps", "pb_ratio", "ps_ratio",
+                    "enterprise_value", "ev_ebitda", "ev_sales"):
+            out[key] = {"available": False, "display": NOT_REPORTED, "reason": reason}
+        out["shares_outstanding"] = {"available": True, "value": shares.value, "as_of": shares.period_end,
+                                      "unit": "ordinary shares (not ADRs)",
+                                      "source": shares_source_note or "SEC EDGAR XBRL"}
+        out["price"] = {"value": price, "as_of": price_info.get("date"), "source": out["price_source"]}
+        out["note"] = reason
         return out
 
     market_cap = price * shares.value
@@ -381,6 +411,13 @@ async def compute_valuation_history(ticker: str, company_facts: dict[str, Any],
 
     if not shares_series:
         return {"available": False, "reason": "SEC XBRL has no annual shares-outstanding series for this filer"}
+
+    if any(sf.form in _FOREIGN_ISSUER_FORMS for sf in shares_series if sf.form):
+        return {"available": False,
+                "reason": "This company is a foreign private issuer whose SEC share counts are ordinary shares "
+                          "while its US price history is per depositary share (ADR). The ordinary-shares-per-ADR "
+                          "ratio is not published in SEC XBRL, so historical multiples would be wrong by that "
+                          "ratio and are reported as unavailable rather than computed from mismatched units."}
 
     by_year_end = {sf.period_end: sf for sf in shares_series if sf.period_end}
     rev_by_end = {e.get("end"): fact_from_entry(e) for e in revenue_series}
