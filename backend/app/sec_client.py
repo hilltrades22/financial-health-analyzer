@@ -170,4 +170,8 @@ class SecClient:
             raise SecUnavailableError(f"SEC EDGAR company facts API returned {resp.status_code}")
         if resp.status_code != 200:
             raise SecUnavailableError(f"SEC EDGAR company facts API returned unexpected {resp.status_code}")
-        return resp.json()
+        # A large filer's company-facts payload can be tens of megabytes.
+        # json.loads on that blocks the event loop for seconds, which on a
+        # single-worker deployment makes every other request - including
+        # /api/health - hang until it finishes. Parse it off the loop.
+        return await asyncio.to_thread(resp.json)

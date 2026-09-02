@@ -10,6 +10,7 @@ result says so explicitly rather than guessing.
 """
 from __future__ import annotations
 
+import asyncio
 import datetime
 import re
 from typing import Any, Optional
@@ -307,7 +308,10 @@ async def build_business_mix(sec_client: SecClient, cik: int, submissions: dict[
                 last_reason = f"Not reported / unavailable - could not locate an XBRL instance document in this filing (names: {names_dbg})."
                 continue  # this filing's static files aren't fully published yet - try the prior year's 10-K
             raw = await sec_client.get_filing_file(cik, accession_nodash, instance_name)
-            root = ET.fromstring(raw)
+            # A 10-K instance document routinely exceeds 10 MB; parsing it is
+            # CPU-bound and would otherwise block the event loop for every
+            # other in-flight request.
+            root = await asyncio.to_thread(ET.fromstring, raw)
         except (SecUnavailableError, TickerNotFoundError, ET.ParseError) as exc:
             last_reason = f"Not reported / unavailable - could not parse this filing's XBRL instance document ({exc})."
             continue

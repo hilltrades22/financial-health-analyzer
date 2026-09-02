@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from .classification import build_classification
 from .grading import build_grading
 from .history import build_financial_timeline, build_historical_scores, explain_score_trend
+from .insiders import build_insider_activity
 from .market_data import (
     compute_bull_base_bear,
     compute_valuation,
@@ -37,6 +38,7 @@ from .sec_client import (
     SEC_USER_AGENT,
 )
 from .segments import build_business_mix
+from .shareholder_returns import build_shareholder_returns
 from .story import build_financial_story, build_story_sections
 
 app = FastAPI(title="FORGE Financial Intelligence", version="2.0.0")
@@ -98,15 +100,24 @@ async def _analyze_ticker(ticker_key: str, frequency: str = "annual") -> dict[st
     except (TickerNotFoundError, SecUnavailableError):
         submissions = {}
 
-    cf = build_company_financials(ticker_key, cik, name or company_facts.get("entityName", ticker_key), company_facts)
-    score = score_company(cf)
-    story = build_financial_story(cf.name, cf.ticker, score)
+    # Normalisation, scoring, quality, history and the timeline are all
+    # pure CPU work over a potentially very large facts payload. Run them in
+    # a worker thread so one big filer cannot stall the event loop and make
+    # the whole service unresponsive to other requests.
+    def _cpu_analysis():
+        _cf = build_company_financials(
+            ticker_key, cik, name or company_facts.get("entityName", ticker_key), company_facts)
+        return (
+            _cf,
+            score_company(_cf),
+            compute_financial_quality(company_facts, _cf.annual),
+            compute_piotroski_f_score(company_facts),
+            build_historical_scores(company_facts),
+            build_financial_timeline(company_facts, frequency=frequency),
+        )
 
-    quality_metrics = compute_financial_quality(company_facts, cf.annual)
-    piotroski = compute_piotroski_f_score(company_facts)
-    historical_scores = build_historical_scores(company_facts)
+    cf, score, quality_metrics, piotroski, historical_scores, timeline = await asyncio.to_thread(_cpu_analysis)
     trend_story = explain_score_trend(historical_scores)
-    timeline = build_financial_timeline(company_facts, frequency=frequency)
 
     # Live market price is best-effort and clearly separated from SEC data.
     price_info, key_stats = await asyncio.gather(
@@ -133,7 +144,8 @@ async def _analyze_ticker(ticker_key: str, frequency: str = "annual") -> dict[st
     # do not describe this kind of company become NOT_APPLICABLE (excluded
     # from the score rather than failed) and peer-appropriate rules are added.
     try:
-        sector_score = evaluate_with_sector(score, cf, company_facts, classification)
+        sector_score = await asyncio.to_thread(
+            evaluate_with_sector, score, cf, company_facts, classification)
     except Exception:  # noqa: BLE001 - never let sector logic break the base analysis
         sector_score = None
     if sector_score:
@@ -161,6 +173,26 @@ async def _analyze_ticker(ticker_key: str, frequency: str = "annual") -> dict[st
         # Business Mix is best-effort - never let a parsing edge case in one
         # filer's XBRL take down the whole analysis.
         business_mix = {"available": False, "reason": "Not reported / unavailable - segment data could not be parsed for this company.", "business_segments": [], "geographic": []}
+
+    # Insider activity from real Form 4 filings. Best-effort and bounded: it
+    # must never delay or break the SEC financial analysis.
+    try:
+        insider_activity = await asyncio.wait_for(
+            build_insider_activity(_sec_client, cik, submissions), timeout=20.0)
+    except asyncio.TimeoutError:
+        insider_activity = {"available": False, "transactions": [], "summary": None,
+                            "reason": "Unavailable - Form 4 filings took too long to retrieve from SEC EDGAR."}
+    except Exception:  # noqa: BLE001
+        insider_activity = {"available": False, "transactions": [], "summary": None,
+                            "reason": "Unavailable - Form 4 insider filings could not be parsed for this company."}
+
+    try:
+        shareholder_returns = await asyncio.to_thread(build_shareholder_returns, company_facts)
+    except Exception:  # noqa: BLE001
+        shareholder_returns = {"dividend": {"pays_dividend": False,
+                                             "reason": "Unavailable - dividend data could not be read."},
+                               "buyback": {"repurchases_reported": False},
+                               "share_count_trend": {"available": False}}
 
     forge = compute_forge_score(score["overall_score"], piotroski, altman, valuation)
     grading = build_grading(forge, score, piotroski, valuation, altman)
@@ -219,6 +251,8 @@ async def _analyze_ticker(ticker_key: str, frequency: str = "annual") -> dict[st
         "analyst": analyst_data(ticker_key),
         "estimates": estimates_data(ticker_key),
         "institutional_ownership": ownership_data(ticker_key),
+        "insider_activity": insider_activity,
+        "shareholder_returns": shareholder_returns,
         "historical_scores": historical_scores,
         "trend_story": trend_story,
         "timeline": timeline,
