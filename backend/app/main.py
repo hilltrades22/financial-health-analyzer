@@ -52,6 +52,17 @@ app.add_middleware(
 
 _sec_client = SecClient()
 
+# A handful of very large filers (JPMorgan's company-facts payload is well
+# over 100 MB) take far longer to download and parse than a normal company.
+# On a single-worker instance an unbounded request for one of them starves
+# every other request, so analysis is bounded two ways: only a small number
+# run concurrently, and any single one gives up rather than hanging forever.
+# The caller gets a clear, honest error instead of a request that never
+# returns and a service that appears dead.
+_ANALYSIS_CONCURRENCY = 2
+_ANALYSIS_TIMEOUT_S = float(os.environ.get("ANALYSIS_TIMEOUT_SECONDS", "110"))
+_analysis_semaphore = asyncio.Semaphore(_ANALYSIS_CONCURRENCY)
+
 # Simple in-memory cache so re-analyzing the same ticker within a short
 # window doesn't hammer SEC EDGAR (SEC asks for reasonable request rates).
 _CACHE_TTL = 15 * 60
@@ -300,7 +311,20 @@ async def _analyze_ticker(ticker_key: str, frequency: str = "annual") -> dict[st
 @app.get("/api/analyze/{ticker}")
 async def analyze(ticker: str, frequency: str = "annual") -> JSONResponse:
     freq = frequency.strip().lower() if frequency.strip().lower() == "quarterly" else "annual"
-    result = await _analyze_ticker(ticker.strip().upper(), freq)
+    symbol = ticker.strip().upper()
+    try:
+        async with _analysis_semaphore:
+            result = await asyncio.wait_for(_analyze_ticker(symbol, freq), timeout=_ANALYSIS_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=504,
+            detail=(
+                f"Analysis of {symbol} did not complete within {int(_ANALYSIS_TIMEOUT_S)} seconds. This "
+                "company's SEC XBRL dataset is unusually large (some long-established filers publish well "
+                "over 100 MB of company facts), which exceeds what this deployment can download and process "
+                "in one request. No partial or estimated result is returned."
+            ),
+        ) from None
     return JSONResponse(result)
 
 
