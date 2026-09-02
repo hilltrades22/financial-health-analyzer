@@ -95,3 +95,35 @@ def test_timeline_still_works_when_retained_earnings_is_reported():
 
 def test_timeline_empty_only_when_nothing_is_reported():
     assert build_financial_timeline({"facts": {"us-gaap": {}}}) == []
+
+
+# --- Bounded analysis ----------------------------------------------------
+
+def test_analysis_timeout_returns_a_clear_error_not_a_hang():
+    """A filer whose SEC dataset is too large to process must produce an
+    explicit, honest error rather than hanging the service."""
+    import asyncio
+    import httpx
+    import pytest
+    from backend.app import main as main_mod
+
+    async def _run():
+        async def _never_finishes(*args, **kwargs):
+            await asyncio.sleep(30)
+
+        original_timeout = main_mod._ANALYSIS_TIMEOUT_S
+        original_analyze = main_mod._analyze_ticker
+        main_mod._ANALYSIS_TIMEOUT_S = 0.05
+        main_mod._analyze_ticker = _never_finishes
+        try:
+            async with httpx.AsyncClient(app=main_mod.app, base_url="http://t") as client:
+                return await client.get("/api/analyze/SLOW")
+        finally:
+            main_mod._ANALYSIS_TIMEOUT_S = original_timeout
+            main_mod._analyze_ticker = original_analyze
+
+    resp = asyncio.run(_run())
+    assert resp.status_code == 504
+    detail = resp.json()["detail"]
+    assert "did not complete" in detail
+    assert "No partial or estimated result" in detail
