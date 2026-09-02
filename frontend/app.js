@@ -191,7 +191,10 @@
     const grading = data.grading || {};
     const badgeClass = "badge-" + slug(forge.label || "Insufficient Data");
     const meta = [];
+    if (data.sector) meta.push(`Sector: ${esc(data.sector)}`);
     if (data.industry) meta.push(`Industry: ${esc(data.industry)}`);
+    if (data.exchange) meta.push(`Exchange: ${esc(data.exchange)}`);
+    if (data.country) meta.push(`Country: ${esc(data.country)}`);
     meta.push(`Latest Quarter: ${esc(data.latest_quarter.period_end || NA)}`);
     meta.push(`Latest Annual: FY${esc(data.latest_annual.fiscal_year || "?")} (${esc(data.latest_annual.period_end || NA)})`);
     if (data.valuation && data.valuation.price && data.valuation.price.value) {
@@ -245,7 +248,43 @@
         </div>
       </div>
       <div class="pillar-grid">${pillarHtml}</div>
+      ${profileStripHtml(data)}
       <p class="kpi-formula" style="margin-top:14px">${esc(grading.grading_methodology || "")}</p>
+    `;
+  }
+
+  // --- Company profile: sector / industry / exchange / country / market cap.
+  // Sourced from SEC's own submissions metadata (SIC code + company record),
+  // never from a third-party classification vendor. Fields SEC does not
+  // report show "Unavailable" instead of being quietly dropped.
+  function profileStripHtml(data) {
+    const c = data.classification;
+    if (!c) return "";
+    const cell = (label, field) => {
+      const val = field && field.available ? field.value : null;
+      return `<div class="profile-cell">
+        <div class="profile-label">${esc(label)}</div>
+        <div class="profile-value${val ? "" : " profile-na"}">${val ? esc(String(val)) : "Unavailable"}</div>
+      </div>`;
+    };
+    const mc = c.market_cap || {};
+    const mcField = { available: mc.available, value: mc.available ? fmtUsd(mc.value) : null };
+    const currency = data.reporting_currency
+      ? { available: true, value: data.reporting_currency }
+      : { available: false };
+    const note = (data.valuation && data.valuation.currency_note) || "";
+    return `
+      <div class="profile-strip">
+        ${cell("Sector", c.sector)}
+        ${cell("Industry", c.industry)}
+        ${cell("Sub-Industry", c.sub_industry)}
+        ${cell("Exchange", c.exchange)}
+        ${cell("Country", c.country)}
+        ${cell("Market Cap", mcField)}
+        ${cell("Reports In", currency)}
+      </div>
+      ${c.peer_group_note ? `<p class="profile-note"><strong>How this sector reads:</strong> ${esc(c.peer_group_note)}</p>` : ""}
+      ${note ? `<p class="profile-note profile-warn">${esc(note)}</p>` : ""}
     `;
   }
 

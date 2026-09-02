@@ -336,3 +336,41 @@ body {
   body { background: #fff; color: #000; }
   .card, .chart-box, .kpi-card { break-inside: avoid; border-color: #ccc; box-shadow: none; }
 }
+
+/* --- Company profile strip (sector / industry / exchange / country) --- */
+.profile-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.profile-cell { min-width: 0; }
+.profile-label {
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 3px;
+}
+.profile-value {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.profile-value.profile-na { color: var(--muted); font-weight: 400; font-style: italic; }
+.profile-note {
+  margin-top: 10px;
+  font-size: 0.85rem;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.profile-note.profile-warn {
+  color: var(--text);
+  background: rgba(255, 176, 32, 0.10);
+  border-left: 3px solid var(--watch);
+  padding: 8px 12px;
+  border-radius: 4px;
+}
