@@ -67,6 +67,7 @@ class _TickerCache:
             headers = _headers().copy()
             headers["Host"] = "www.sec.gov"
             try:
+                await _rate_limiter.acquire()
                 resp = await client.get(TICKER_MAP_URL, headers=headers, timeout=_DEFAULT_TIMEOUT)
             except httpx.HTTPError as exc:
                 raise SecUnavailableError(f"Could not reach SEC EDGAR ticker map: {exc}") from exc
@@ -92,11 +93,44 @@ class _TickerCache:
 _ticker_cache = _TickerCache()
 
 
+class _RateLimiter:
+    """Caps outbound request rate to SEC.
+
+    SEC's fair-access policy asks automated clients to stay within a modest
+    requests-per-second rate and to identify themselves. Exceeding it gets an
+    IP temporarily blocked, which shows up as requests that hang or fail for
+    reasons that look like application bugs. Every SEC call in this module
+    goes through here, so adding a feature that makes more requests (insider
+    Form 4 filings, for example) cannot accidentally breach the limit.
+    """
+
+    def __init__(self, requests_per_second: float = 5.0):
+        self._min_interval = 1.0 / requests_per_second
+        self._lock = asyncio.Lock()
+        self._last = 0.0
+
+    async def acquire(self) -> None:
+        async with self._lock:
+            now = time.monotonic()
+            wait = self._min_interval - (now - self._last)
+            if wait > 0:
+                await asyncio.sleep(wait)
+            self._last = time.monotonic()
+
+
+# Shared across every SecClient instance and every request in the process.
+_rate_limiter = _RateLimiter(float(os.environ.get("SEC_REQUESTS_PER_SECOND", "5")))
+
+
 class SecClient:
-    """Async client wrapping the three SEC EDGAR endpoints we use."""
+    """Async client wrapping the SEC EDGAR endpoints we use."""
 
     def __init__(self) -> None:
-        self._client = httpx.AsyncClient()
+        # Bound connection reuse so a burst of concurrent calls (insider
+        # filings, for instance) cannot open an unreasonable number of
+        # sockets against SEC.
+        self._client = httpx.AsyncClient(
+            limits=httpx.Limits(max_connections=6, max_keepalive_connections=3))
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -117,9 +151,14 @@ class SecClient:
         headers = _headers().copy()
         headers["Host"] = "data.sec.gov"
         try:
+            await _rate_limiter.acquire()
             resp = await self._client.get(url, headers=headers, timeout=_DEFAULT_TIMEOUT)
         except httpx.HTTPError as exc:
             raise SecUnavailableError(f"Could not reach SEC EDGAR submissions API: {exc}") from exc
+        if resp.status_code == 429:
+            raise SecUnavailableError(
+                "SEC EDGAR is rate-limiting this service (HTTP 429). SEC asks automated clients to stay within "
+                "a modest request rate; please wait a moment and try again.")
         if resp.status_code == 404:
             raise TickerNotFoundError(f"No SEC filings found for CIK {cik10}")
         if resp.status_code >= 500:
@@ -133,6 +172,7 @@ class SecClient:
         headers = _headers().copy()
         headers["Host"] = "www.sec.gov"
         try:
+            await _rate_limiter.acquire()
             resp = await self._client.get(url, headers=headers, timeout=_DEFAULT_TIMEOUT)
         except httpx.HTTPError as exc:
             raise SecUnavailableError(f"Could not reach SEC EDGAR filing index: {exc}") from exc
@@ -148,6 +188,7 @@ class SecClient:
         headers = _headers().copy()
         headers["Host"] = "www.sec.gov"
         try:
+            await _rate_limiter.acquire()
             resp = await self._client.get(url, headers=headers, timeout=httpx.Timeout(30.0, connect=10.0))
         except httpx.HTTPError as exc:
             raise SecUnavailableError(f"Could not reach SEC EDGAR filing file: {exc}") from exc
@@ -161,9 +202,14 @@ class SecClient:
         headers = _headers().copy()
         headers["Host"] = "data.sec.gov"
         try:
+            await _rate_limiter.acquire()
             resp = await self._client.get(url, headers=headers, timeout=_DEFAULT_TIMEOUT)
         except httpx.HTTPError as exc:
             raise SecUnavailableError(f"Could not reach SEC EDGAR company facts API: {exc}") from exc
+        if resp.status_code == 429:
+            raise SecUnavailableError(
+                "SEC EDGAR is rate-limiting this service (HTTP 429). SEC asks automated clients to stay within "
+                "a modest request rate; please wait a moment and try again.")
         if resp.status_code == 404:
             raise TickerNotFoundError(f"No XBRL company facts found for CIK {cik10}")
         if resp.status_code >= 500:
