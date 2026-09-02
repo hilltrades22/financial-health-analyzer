@@ -127,3 +127,48 @@ def test_analysis_timeout_returns_a_clear_error_not_a_hang():
     detail = resp.json()["detail"]
     assert "did not complete" in detail
     assert "No partial or estimated result" in detail
+
+
+def test_sec_requests_are_rate_limited():
+    """SEC asks automated clients to stay within a modest request rate.
+    Every call must pass through the limiter, so adding a feature that makes
+    more requests cannot silently breach it."""
+    import asyncio
+    import time as _time
+    from backend.app.sec_client import _RateLimiter
+
+    async def _run():
+        limiter = _RateLimiter(requests_per_second=20.0)   # 50ms apart
+        start = _time.monotonic()
+        for _ in range(4):
+            await limiter.acquire()
+        return _time.monotonic() - start
+
+    elapsed = asyncio.run(_run())
+    assert elapsed >= 0.15 - 0.02      # 3 gaps of 50ms between 4 requests
+
+
+def test_sec_rate_limit_response_is_reported_as_such():
+    """A 429 from SEC must be surfaced as throttling, not as a missing
+    company or a generic application failure."""
+    import asyncio
+    import httpx
+    import pytest
+    import respx
+    from backend.app.sec_client import SecClient, SecUnavailableError
+
+    @respx.mock
+    async def _run():
+        respx.get(url__regex=r"https://data\.sec\.gov/api/xbrl/companyfacts/.*").mock(
+            return_value=httpx.Response(429))
+        client = SecClient()
+        try:
+            with pytest.raises(SecUnavailableError) as exc:
+                await client.get_company_facts(320193)
+            return str(exc.value)
+        finally:
+            await client.aclose()
+
+    message = asyncio.run(_run())
+    assert "rate-limiting" in message
+    assert "429" in message
