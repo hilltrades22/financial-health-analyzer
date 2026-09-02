@@ -127,3 +127,48 @@ def test_classification_reports_unavailable_rather_than_guessing():
     assert empty["sector"]["value"] is None
     assert empty["market_cap"]["available"] is False
     assert empty["peer_group"] == "general"
+
+
+def test_domestic_filers_still_get_price_based_multiples():
+    """The ADR guard must key off the foreign-issuer filing form only - a
+    domestic 10-K filer's valuation must be completely unaffected."""
+    from backend.app.market_data import compute_valuation
+
+    facts = {"facts": {"us-gaap": {
+        "CommonStockSharesOutstanding": {"units": {"shares": _inst([("2025-09-30", 1.5e10)], form="10-K")}},
+        "NetIncomeLoss": {"units": {"USD": _dur([("2024-10-01", "2025-09-30", 1.0e11)], form="10-K")}},
+        "StockholdersEquity": {"units": {"USD": _inst([("2025-09-30", 7e10)], form="10-K")}},
+    }}}
+    price = {"available": True, "price": 220.0, "currency": "USD", "date": "2026-09-01",
+             "source": "test", "source_short": "test", "fetched_at": "2026-09-01"}
+    val = compute_valuation(facts, price, total_debt=None, cash=None)
+    assert val["market_cap"]["available"] is True
+    assert val["pe_ratio"]["available"] is True
+    assert val["reporting_currency"] == "USD"
+
+
+def test_foreign_issuer_price_multiples_are_withheld_not_guessed():
+    """SEC gives ordinary shares on a 20-F; the US quote is per ADR and the
+    ratio is not in XBRL, so nothing price-based may be computed."""
+    from backend.app.market_data import compute_valuation
+
+    facts = {"facts": {"ifrs-full": {
+        "ProfitLoss": {"units": {"USD": _dur([("2024-01-01", "2024-12-31", 3.6e10)])}},
+    }, "dei": {
+        "EntityCommonStockSharesOutstanding": {"units": {"shares": _inst([("2024-12-31", 2.59e10)])}},
+    }}}
+    price = {"available": True, "price": 412.87, "currency": "USD", "date": "2026-09-01",
+             "source": "test", "source_short": "test", "fetched_at": "2026-09-01"}
+    val = compute_valuation(facts, price, total_debt=None, cash=None)
+    assert val["market_cap"]["available"] is False
+    assert val["pe_ratio"]["available"] is False
+    assert "ordinary shares" in val["market_cap"]["reason"]
+    # The real share count is still reported - clearly labelled as ordinary shares.
+    assert val["shares_outstanding"]["value"] == 2.59e10
+    assert val["shares_outstanding"]["unit"] == "ordinary shares (not ADRs)"
+
+
+def test_repeated_exchanges_are_listed_once():
+    """Alphabet reports Nasdaq once per share class."""
+    c = build_classification({"sic": "7372", "exchanges": ["Nasdaq", "Nasdaq", "Nasdaq", "Nasdaq"]})
+    assert c["exchange"]["value"] == "Nasdaq"

@@ -91,11 +91,19 @@ async def test_foreign_private_issuer_returns_a_real_analysis():
     assert data["reporting_currency"] == "TWD"
     assert data["valuation"]["price_currency"] == "USD"
     assert "currency_note" in data["valuation"]
-    # P/E can be computed because the filer itself reported USD net income;
-    # P/B cannot, because equity was reported only in TWD - and it must be
-    # marked unavailable rather than converted.
-    assert data["valuation"]["pe_ratio"]["available"] is True
-    assert data["valuation"]["pb_ratio"]["available"] is False
+
+    # ADR-unit discipline: SEC reports ORDINARY shares for a 20-F filer while
+    # the US quote is per depositary share, and SEC XBRL does not publish the
+    # ratio. Every price-based figure must therefore be unavailable with a
+    # stated reason - never computed from mismatched units.
+    val = data["valuation"]
+    for key in ("market_cap", "pe_ratio", "eps", "pb_ratio", "ps_ratio", "ev_ebitda"):
+        assert val[key]["available"] is False, key
+        assert "depositary share" in val[key]["reason"]
+    assert val["shares_outstanding"]["available"] is True
+    assert val["shares_outstanding"]["unit"] == "ordinary shares (not ADRs)"
+    assert data["valuation_history"]["available"] is False
+    assert "ADR" in data["valuation_history"]["reason"]
 
     # Nothing in the payload crashed on missing analyst/segment data.
     assert data["business_mix"]["available"] is False
