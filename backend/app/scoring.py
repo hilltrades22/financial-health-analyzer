@@ -58,7 +58,7 @@ def _source(*facts: FactValue) -> str:
     parts = []
     for f in facts:
         if f.available and f.concept:
-            parts.append(f"us-gaap:{f.concept} ({f.form}, period end {f.period_end}, filed {f.filed})")
+            parts.append(f"{f.concept} ({f.form}, period end {f.period_end}, filed {f.filed})")
     if not parts:
         return "SEC EDGAR XBRL Company Facts (data.sec.gov) - concept not found in filer's data"
     return "SEC EDGAR XBRL Company Facts (data.sec.gov): " + "; ".join(parts)

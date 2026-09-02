@@ -27,6 +27,7 @@ from typing import Any, Optional
 import httpx
 
 from .models import NOT_REPORTED
+from . import normalize as N
 from .normalize import annual_series, fact_from_entry, latest_shares_outstanding, annual_shares_outstanding_series
 
 STOOQ_URL = "https://stooq.com/q/l/?s={symbol}.us&f=sd2t2ohlcv&h&e=csv"
@@ -110,6 +111,7 @@ async def fetch_stock_price(ticker: str) -> dict[str, Any]:
             "high": float(row["High"]) if row.get("High") not in (None, "N/D", "") else None,
             "low": float(row["Low"]) if row.get("Low") not in (None, "N/D", "") else None,
             "volume": int(float(row["Volume"])) if row.get("Volume") not in (None, "N/D", "") else None,
+            "currency": "USD",
             "source": "Stooq (stooq.com) delayed market quote - not SEC data (Yahoo Finance fallback path)",
             "source_short": "Stooq",
             "fetched_at": time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()),
@@ -163,6 +165,7 @@ async def fetch_price_history(ticker: str, range_key: str) -> dict[str, Any]:
         return {"available": False, "reason": f"Unknown range '{range_key}'"}
     try:
         chart = await _fetch_yahoo_chart(ticker, spec["range"], spec["interval"])
+        chart_currency = (chart.get("meta") or {}).get("currency")
         timestamps = chart.get("timestamp") or []
         quote = ((chart.get("indicators") or {}).get("quote") or [{}])[0]
         closes = quote.get("close") or []
@@ -189,6 +192,7 @@ async def fetch_price_history(ticker: str, range_key: str) -> dict[str, Any]:
             "available": True,
             "range": range_key.upper(),
             "interval": spec["interval"],
+            "currency": chart_currency,
             "points": points,
             "source": "Yahoo Finance (query1.finance.yahoo.com) - historical daily close, not SEC data",
             "fetched_at": time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()),
@@ -197,8 +201,9 @@ async def fetch_price_history(ticker: str, range_key: str) -> dict[str, Any]:
         return {"available": False, "reason": f"Could not reach Yahoo Finance for price history: {exc}"}
 
 
-def _latest_annual(company_facts: dict[str, Any], tags: list[str], duration: bool):
-    series = annual_series(company_facts, tags, duration=duration)
+def _latest_annual(company_facts: dict[str, Any], tags: list[str], duration: bool,
+                   currency: Optional[str] = None):
+    series = annual_series(company_facts, tags, duration=duration, currency=currency)
     return fact_from_entry(series[0]) if series else None
 
 
@@ -233,12 +238,27 @@ def compute_valuation(company_facts: dict[str, Any], price_info: dict[str, Any],
         from .models import FactValue
         shares = FactValue(value=key_stats["shares_outstanding"], available=True)
         shares_source_note = "Yahoo Finance (query1.finance.yahoo.com) - SEC XBRL had no shares-outstanding tag for this filer"
-    equity = _latest_annual(company_facts, ["StockholdersEquity"], duration=False)
-    revenue = _latest_annual(company_facts, ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax",
-                                               "RevenueFromContractWithCustomerIncludingAssessedTax", "SalesRevenueNet"], duration=True)
-    net_income = _latest_annual(company_facts, ["NetIncomeLoss", "ProfitLoss"], duration=True)
-    op_income = _latest_annual(company_facts, ["OperatingIncomeLoss"], duration=True)
-    dep_amort = _latest_annual(company_facts, ["DepreciationDepletionAndAmortization", "DepreciationAmortizationAndAccretionNet"], duration=True)
+    # A market price is quoted in the listing currency (USD for a US-listed
+    # ADR), so every price-based multiple must be built from fundamentals in
+    # that SAME currency. For a foreign private issuer reporting in, say,
+    # TWD, we use only the USD figures that filer itself tagged in its own
+    # 20-F - we never apply an exchange rate of our own to manufacture one.
+    price_currency = (price_info.get("currency") or "USD").upper()
+    equity = _latest_annual(company_facts, N.TOTAL_EQUITY_TAGS, duration=False, currency=price_currency)
+    revenue = _latest_annual(company_facts, N.REVENUE_TAGS, duration=True, currency=price_currency)
+    net_income = _latest_annual(company_facts, N.NET_INCOME_TAGS, duration=True, currency=price_currency)
+    op_income = _latest_annual(company_facts, N.OPERATING_INCOME_TAGS, duration=True, currency=price_currency)
+    dep_amort = _latest_annual(company_facts, N.DEPRECIATION_TAGS, duration=True, currency=price_currency)
+    reporting_currency = N.reporting_currency(company_facts)
+    out["reporting_currency"] = reporting_currency
+    out["price_currency"] = price_currency
+    if reporting_currency != price_currency:
+        out["currency_note"] = (
+            f"This company reports its financial statements in {reporting_currency}, but its shares trade in "
+            f"{price_currency}. Price-based multiples below are computed only from the {price_currency} figures the "
+            f"company itself reported to the SEC; any multiple whose {price_currency} input was not reported is "
+            f"marked unavailable rather than converted at an exchange rate."
+        )
 
     def fmt(v):
         if v is None:
@@ -353,11 +373,11 @@ async def compute_valuation_history(ticker: str, company_facts: dict[str, Any],
     points = price_hist["points"]
 
     shares_series = annual_shares_outstanding_series(company_facts)
-    revenue_series = annual_series(company_facts, ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax",
-                                                     "RevenueFromContractWithCustomerIncludingAssessedTax", "SalesRevenueNet"], duration=True)
-    net_income_series = annual_series(company_facts, ["NetIncomeLoss", "ProfitLoss"], duration=True)
-    equity_series = annual_series(company_facts, ["StockholdersEquity"], duration=False)
-    op_income_series = annual_series(company_facts, ["OperatingIncomeLoss"], duration=True)
+    hist_currency = (price_hist.get("currency") or "USD").upper()
+    revenue_series = annual_series(company_facts, N.REVENUE_TAGS, duration=True, currency=hist_currency)
+    net_income_series = annual_series(company_facts, N.NET_INCOME_TAGS, duration=True, currency=hist_currency)
+    equity_series = annual_series(company_facts, N.TOTAL_EQUITY_TAGS, duration=False, currency=hist_currency)
+    op_income_series = annual_series(company_facts, N.OPERATING_INCOME_TAGS, duration=True, currency=hist_currency)
 
     if not shares_series:
         return {"available": False, "reason": "SEC XBRL has no annual shares-outstanding series for this filer"}

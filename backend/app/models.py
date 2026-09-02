@@ -22,6 +22,11 @@ class FactValue:
     concept: Optional[str] = None
     filed: Optional[str] = None
     accn: Optional[str] = None
+    # XBRL unit the value is denominated in ("USD", "TWD", "shares", ...).
+    # Carried so that no calculation can silently mix two currencies - a
+    # foreign private issuer reporting in TWD must never have its figures
+    # combined with a USD market price without saying so.
+    unit: Optional[str] = None
 
     @staticmethod
     def missing() -> "FactValue":

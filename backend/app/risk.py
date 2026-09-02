@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from .models import NOT_REPORTED
+from . import normalize as N
 from .normalize import annual_series, fact_from_entry
 
 
@@ -20,15 +21,14 @@ def _two_year(company_facts: dict[str, Any], tags: list[str], duration: bool):
 
 
 def compute_altman_z_score(company_facts: dict[str, Any], market_cap: Optional[float]) -> dict[str, Any]:
-    assets = _two_year(company_facts, ["Assets"], duration=False)
-    cur_assets = _two_year(company_facts, ["AssetsCurrent"], duration=False)
-    cur_liab = _two_year(company_facts, ["LiabilitiesCurrent"], duration=False)
-    retained_earnings = _two_year(company_facts, ["RetainedEarningsAccumulatedDeficit"], duration=False)
-    op_income = _two_year(company_facts, ["OperatingIncomeLoss"], duration=True)
-    total_liabilities = _two_year(company_facts, ["Liabilities"], duration=False)
-    equity = _two_year(company_facts, ["StockholdersEquity"], duration=False)
-    revenue = _two_year(company_facts, ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax",
-                                          "RevenueFromContractWithCustomerIncludingAssessedTax", "SalesRevenueNet"], duration=True)
+    assets = _two_year(company_facts, N.ASSETS_TAGS, duration=False)
+    cur_assets = _two_year(company_facts, N.ASSETS_CURRENT_TAGS, duration=False)
+    cur_liab = _two_year(company_facts, N.LIABILITIES_CURRENT_TAGS, duration=False)
+    retained_earnings = _two_year(company_facts, N.RETAINED_EARNINGS_TAGS, duration=False)
+    op_income = _two_year(company_facts, N.OPERATING_INCOME_TAGS, duration=True)
+    total_liabilities = _two_year(company_facts, N.TOTAL_LIABILITIES_TAGS, duration=False)
+    equity = _two_year(company_facts, N.TOTAL_EQUITY_TAGS, duration=False)
+    revenue = _two_year(company_facts, N.REVENUE_TAGS, duration=True)
 
     def ok(*facts):
         return all(f is not None and f.available for f in facts)

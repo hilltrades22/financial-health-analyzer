@@ -12,20 +12,20 @@ from typing import Any, Optional
 from .models import NOT_REPORTED
 from .normalize import annual_series, fact_from_entry
 
-REVENUE_TAGS = [
-    "Revenues",
-    "RevenueFromContractWithCustomerExcludingAssessedTax",
-    "RevenueFromContractWithCustomerIncludingAssessedTax",
-    "SalesRevenueNet",
-]
-NET_INCOME_TAGS = ["NetIncomeLoss", "ProfitLoss"]
-ASSETS_TAGS = ["Assets"]
-ASSETS_CURRENT_TAGS = ["AssetsCurrent"]
-LIABILITIES_CURRENT_TAGS = ["LiabilitiesCurrent"]
-GROSS_PROFIT_TAGS = ["GrossProfit"]
-COST_OF_REVENUE_TAGS = ["CostOfRevenue", "CostOfGoodsAndServicesSold", "CostOfGoodsSold"]
-SHARES_OUTSTANDING_TAGS = ["CommonStockSharesOutstanding"]
-DILUTED_EPS_TAGS = ["EarningsPerShareDiluted", "EarningsPerShareBasicAndDiluted"]
+# Concept lists live in normalize.py so us-gaap and IFRS coverage is
+# maintained in exactly one place (see normalize.TAXONOMIES).
+from .normalize import (  # noqa: E402
+    ASSETS_CURRENT_TAGS,
+    ASSETS_TAGS,
+    COST_OF_REVENUE_TAGS,
+    DILUTED_EPS_TAGS,
+    GROSS_PROFIT_TAGS,
+    LIABILITIES_CURRENT_TAGS,
+    NET_INCOME_TAGS,
+    REVENUE_TAGS,
+)
+
+SHARES_OUTSTANDING_TAGS = ["CommonStockSharesOutstanding", "NumberOfSharesOutstanding"]
 
 
 def _fmt_usd(v: Optional[float]) -> str:

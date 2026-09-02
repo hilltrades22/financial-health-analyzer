@@ -16,59 +16,129 @@ from .models import (
     QuarterlySnapshot,
 )
 
-# --- XBRL us-gaap concept candidates, in priority order -------------------
+# --- XBRL concept candidates, in priority order ---------------------------
 # Filers tag the same economic concept under different names. We try each
 # candidate in order and use the first one that has usable data.
+#
+# Two taxonomies are supported, because not every SEC registrant is a
+# domestic us-gaap filer:
+#   * us-gaap  - domestic filers (10-K / 10-Q).
+#   * ifrs-full - foreign private issuers such as Taiwan Semiconductor (TSM)
+#     and other ADRs, which file 20-F / 40-F / 6-K under IFRS.
+# Both taxonomies' tag names are listed together in each list below; a given
+# filer only ever uses one of them, so there is no ambiguity, and us-gaap
+# names stay first so domestic behaviour is completely unchanged.
+TAXONOMIES = ("us-gaap", "ifrs-full")
 
 CASH_TAGS = [
     "CashAndCashEquivalentsAtCarryingValue",
     "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
     "CashAndCashEquivalentsAtCarryingValueIncludingDiscontinuedOperations",
+    # IFRS
+    "CashAndCashEquivalents",
 ]
 SHORT_TERM_INVESTMENT_TAGS = [
     "ShortTermInvestments",
     "MarketableSecuritiesCurrent",
     "AvailableForSaleSecuritiesCurrent",
+    # IFRS
+    "CurrentFinancialAssetsAtFairValueThroughProfitOrLoss",
+    "OtherCurrentFinancialAssets",
 ]
 LONG_TERM_INVESTMENT_TAGS = [
     "LongTermInvestments",
     "MarketableSecuritiesNoncurrent",
     "AvailableForSaleSecuritiesNoncurrent",
+    # IFRS
+    "OtherNoncurrentFinancialAssets",
+    "NoncurrentFinancialAssetsAtFairValueThroughOtherComprehensiveIncome",
 ]
 
-DEBT_CURRENT_AGGREGATE_TAGS = ["DebtCurrent", "ShortTermDebt"]
-DEBT_CURRENT_COMPONENT_TAGS = ["ShortTermBorrowings", "LongTermDebtCurrent", "CommercialPaper"]
-LONG_TERM_DEBT_TAGS = ["LongTermDebtNoncurrent", "LongTermDebt", "LongTermNotesPayable"]
+DEBT_CURRENT_AGGREGATE_TAGS = ["DebtCurrent", "ShortTermDebt", "ShorttermBorrowings"]
+DEBT_CURRENT_COMPONENT_TAGS = ["ShortTermBorrowings", "LongTermDebtCurrent", "CommercialPaper",
+                               "CurrentPortionOfLongtermBorrowings"]
+LONG_TERM_DEBT_TAGS = ["LongTermDebtNoncurrent", "LongTermDebt", "LongTermNotesPayable",
+                       # IFRS
+                       "NoncurrentPortionOfLongtermBorrowings", "LongtermBorrowings", "Borrowings"]
 
-TOTAL_LIABILITIES_TAGS = ["Liabilities"]
+TOTAL_LIABILITIES_TAGS = ["Liabilities"]  # same tag name in us-gaap and IFRS
 TOTAL_EQUITY_TAGS = [
     "StockholdersEquity",
     "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
+    # IFRS
+    "EquityAttributableToOwnersOfParent",
+    "Equity",
 ]
 TREASURY_STOCK_TAGS = ["TreasuryStockValue", "TreasuryStockCommonValue"]
 PREFERRED_STOCK_TAGS = ["PreferredStockValue", "PreferredStockValueOutstanding"]
-RETAINED_EARNINGS_TAGS = ["RetainedEarningsAccumulatedDeficit"]
+RETAINED_EARNINGS_TAGS = ["RetainedEarningsAccumulatedDeficit", "RetainedEarnings"]
 
-OPERATING_LEASE_CURRENT_TAGS = ["OperatingLeaseLiabilityCurrent"]
-OPERATING_LEASE_NONCURRENT_TAGS = ["OperatingLeaseLiabilityNoncurrent"]
+OPERATING_LEASE_CURRENT_TAGS = ["OperatingLeaseLiabilityCurrent", "CurrentLeaseLiabilities"]
+OPERATING_LEASE_NONCURRENT_TAGS = ["OperatingLeaseLiabilityNoncurrent", "NoncurrentLeaseLiabilities"]
 FINANCE_LEASE_CURRENT_TAGS = ["FinanceLeaseLiabilityCurrent", "FinanceLeaseLiabilityCurrentAdditional"]
 FINANCE_LEASE_NONCURRENT_TAGS = ["FinanceLeaseLiabilityNoncurrent"]
 
 OPERATING_CASH_FLOW_TAGS = [
     "NetCashProvidedByUsedInOperatingActivities",
     "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations",
+    # IFRS
+    "CashFlowsFromUsedInOperatingActivities",
 ]
 CAPEX_TAGS = [
     "PaymentsToAcquirePropertyPlantAndEquipment",
     "PaymentsForCapitalImprovements",
     "PaymentsToAcquireProductiveAssets",
+    # IFRS
+    "PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities",
 ]
-OPERATING_INCOME_TAGS = ["OperatingIncomeLoss"]
-INTEREST_EXPENSE_TAGS = ["InterestExpense", "InterestExpenseDebt", "InterestExpenseNonoperating"]
-REPURCHASE_TAGS = ["PaymentsForRepurchaseOfCommonStock", "PaymentsForRepurchaseOfEquity"]
+OPERATING_INCOME_TAGS = ["OperatingIncomeLoss", "ProfitLossFromOperatingActivities"]
+INTEREST_EXPENSE_TAGS = ["InterestExpense", "InterestExpenseDebt", "InterestExpenseNonoperating",
+                         "FinanceCosts"]
+REPURCHASE_TAGS = ["PaymentsForRepurchaseOfCommonStock", "PaymentsForRepurchaseOfEquity",
+                   "PaymentsToAcquireOrRedeemEntitysShares"]
 
-ANNUAL_FORMS = {"10-K", "10-K/A"}
-QUARTERLY_ELIGIBLE_FORMS = {"10-Q", "10-Q/A", "10-K", "10-K/A"}
+# Shared income-statement / balance-sheet lists used by quality.py, risk.py
+# and market_data.py, kept here so there is a single source of truth for
+# every concept the app knows how to read (and so IFRS coverage only has to
+# be maintained in one place).
+REVENUE_TAGS = [
+    "Revenues",
+    "RevenueFromContractWithCustomerExcludingAssessedTax",
+    "RevenueFromContractWithCustomerIncludingAssessedTax",
+    "SalesRevenueNet",
+    # IFRS
+    "Revenue",
+    "RevenueFromContractsWithCustomers",
+]
+NET_INCOME_TAGS = ["NetIncomeLoss", "ProfitLoss", "ProfitLossAttributableToOwnersOfParent"]
+ASSETS_TAGS = ["Assets"]  # same tag name in us-gaap and IFRS
+ASSETS_CURRENT_TAGS = ["AssetsCurrent", "CurrentAssets"]
+LIABILITIES_CURRENT_TAGS = ["LiabilitiesCurrent", "CurrentLiabilities"]
+LIABILITIES_NONCURRENT_TAGS = ["LiabilitiesNoncurrent", "NoncurrentLiabilities"]
+GROSS_PROFIT_TAGS = ["GrossProfit"]  # same tag name in us-gaap and IFRS
+COST_OF_REVENUE_TAGS = ["CostOfRevenue", "CostOfGoodsAndServicesSold", "CostOfGoodsSold", "CostOfSales"]
+DILUTED_EPS_TAGS = ["EarningsPerShareDiluted", "EarningsPerShareBasicAndDiluted",
+                    "DilutedEarningsLossPerShare"]
+BASIC_EPS_TAGS = ["EarningsPerShareBasic", "BasicEarningsLossPerShare"]
+DEPRECIATION_TAGS = ["DepreciationDepletionAndAmortization", "DepreciationAmortizationAndAccretionNet",
+                     "DepreciationAndAmortisationExpense"]
+DIVIDENDS_PAID_TAGS = ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock",
+                       "DividendsPaidClassifiedAsFinancingActivities"]
+DIVIDENDS_PER_SHARE_TAGS = ["CommonStockDividendsPerShareDeclared", "CommonStockDividendsPerShareCashPaid",
+                            "DividendsPerShareDeclared"]
+INVESTING_CASH_FLOW_TAGS = ["NetCashProvidedByUsedInInvestingActivities",
+                            "NetCashProvidedByUsedInInvestingActivitiesContinuingOperations",
+                            "CashFlowsFromUsedInInvestingActivities"]
+FINANCING_CASH_FLOW_TAGS = ["NetCashProvidedByUsedInFinancingActivities",
+                            "NetCashProvidedByUsedInFinancingActivitiesContinuingOperations",
+                            "CashFlowsFromUsedInFinancingActivities"]
+
+# Annual report forms across filer types: 10-K (domestic), 20-F (foreign
+# private issuer), 40-F (Canadian MJDS). Interim: 10-Q (domestic) and 6-K
+# (foreign private issuer). Without the foreign forms, a legitimate SEC
+# registrant like TSM resolves to a CIK but yields zero usable facts.
+ANNUAL_FORMS = {"10-K", "10-K/A", "20-F", "20-F/A", "40-F", "40-F/A"}
+QUARTERLY_ELIGIBLE_FORMS = ANNUAL_FORMS | {"10-Q", "10-Q/A", "6-K", "6-K/A"}
 
 
 def _parse_date(s: Optional[str]) -> Optional[date]:
@@ -80,23 +150,81 @@ def _parse_date(s: Optional[str]) -> Optional[date]:
         return None
 
 
-def _units_for(company_facts: dict[str, Any], tag: str, namespace: str = "us-gaap") -> list[dict[str, Any]]:
-    ns_facts = company_facts.get("facts", {}).get(namespace, {})
-    concept = ns_facts.get(tag)
-    if not concept:
-        return []
-    units = concept.get("units", {})
-    # USD is the overwhelmingly common unit for dollar concepts; share-count
-    # concepts (e.g. CommonStockSharesOutstanding) are tagged in "shares"
-    # instead - checking both here means the same lookup helpers work for
-    # both without every caller needing to know which unit applies.
-    entries = units.get("USD") or units.get("shares") or []
-    out = []
-    for e in entries:
-        e = dict(e)
-        e["_concept"] = tag
-        out.append(e)
-    return out
+def _is_currency_unit(unit: str) -> bool:
+    """True for an ISO-4217 currency code ("USD", "TWD", "EUR"), false for
+    XBRL's non-monetary units ("shares", "pure", "USD/shares")."""
+    return len(unit) == 3 and unit.isalpha() and unit.isupper()
+
+
+def reporting_currency(company_facts: dict[str, Any]) -> str:
+    """The currency this filer actually reports in, determined from its own
+    XBRL facts rather than assumed. Domestic filers report in USD; a foreign
+    private issuer such as Taiwan Semiconductor reports in TWD (while also
+    tagging a smaller set of USD convenience-translation facts). Picking the
+    dominant currency and then reading every concept in that same currency
+    is what keeps a balance sheet internally consistent instead of silently
+    mixing two currencies together."""
+    cached = company_facts.get("_forge_reporting_currency")
+    if cached:
+        return cached
+    counts: dict[str, int] = {}
+    for ns in TAXONOMIES:
+        for concept in (company_facts.get("facts", {}).get(ns) or {}).values():
+            for unit, entries in (concept.get("units") or {}).items():
+                if _is_currency_unit(unit):
+                    counts[unit] = counts.get(unit, 0) + len(entries)
+    currency = max(counts, key=lambda k: counts[k]) if counts else "USD"
+    company_facts["_forge_reporting_currency"] = currency
+    return currency
+
+
+def available_currencies(company_facts: dict[str, Any]) -> list[str]:
+    """Every currency this filer has tagged facts in, most-used first."""
+    counts: dict[str, int] = {}
+    for ns in TAXONOMIES:
+        for concept in (company_facts.get("facts", {}).get(ns) or {}).values():
+            for unit, entries in (concept.get("units") or {}).items():
+                if _is_currency_unit(unit):
+                    counts[unit] = counts.get(unit, 0) + len(entries)
+    return sorted(counts, key=lambda k: -counts[k])
+
+
+def _units_for(company_facts: dict[str, Any], tag: str, namespace: Optional[str] = None,
+               currency: Optional[str] = None) -> list[dict[str, Any]]:
+    """All datapoints for one concept, searched across the supported
+    taxonomies (us-gaap first, then ifrs-full) and read in a single,
+    explicit currency.
+
+    Every returned entry is stamped with the namespace-qualified concept
+    name and the unit it is denominated in, so the audit trail shows exactly
+    which taxonomy and currency a number came from.
+    """
+    namespaces = [namespace] if namespace else list(TAXONOMIES)
+    for ns in namespaces:
+        concept = (company_facts.get("facts", {}).get(ns) or {}).get(tag)
+        if not concept:
+            continue
+        units = concept.get("units") or {}
+        if currency is not None:
+            chosen = currency if currency in units else None
+        else:
+            # Monetary concepts are read in the filer's own reporting
+            # currency (falling back to USD); share-count concepts are
+            # tagged in "shares" instead, so the same helpers work for both
+            # without every caller needing to know which unit applies.
+            primary = reporting_currency(company_facts)
+            chosen = next((u for u in (primary, "USD", "shares") if u in units), None)
+        if chosen is None:
+            continue
+        out = []
+        for e in units[chosen]:
+            e = dict(e)
+            e["_concept"] = f"{ns}:{tag}"
+            e["_unit"] = chosen
+            out.append(e)
+        if out:
+            return out
+    return []
 
 
 def latest_shares_outstanding(company_facts: dict[str, Any]) -> FactValue:
@@ -104,8 +232,12 @@ def latest_shares_outstanding(company_facts: dict[str, Any]) -> FactValue:
     us-gaap balance-sheet concept first (any 10-K/10-Q), then falling back
     to the dei cover-page concept every filer must report. Never fabricated -
     returns FactValue.missing() if neither is present."""
-    for tag in ("CommonStockSharesOutstanding", "CommonStockSharesIssued"):
-        entries = _units_for(company_facts, tag, namespace="us-gaap")
+    for tag in ("CommonStockSharesOutstanding", "CommonStockSharesIssued",
+                "NumberOfSharesOutstanding", "IssuedCapitalNumberOfShares"):
+        # No currency constraint: these concepts are share counts by
+        # definition, and filers tag them under "shares" (and, rarely, other
+        # unit keys) - the unit actually used is recorded on the FactValue.
+        entries = _units_for(company_facts, tag)
         candidates = [e for e in entries if e.get("form") in QUARTERLY_ELIGIBLE_FORMS and e.get("end") and "start" not in e]
         if candidates:
             candidates.sort(key=lambda e: (_parse_date(e.get("end")) or date.min, e.get("filed") or ""), reverse=True)
@@ -113,7 +245,8 @@ def latest_shares_outstanding(company_facts: dict[str, Any]) -> FactValue:
             return FactValue(
                 value=float(best["val"]), available=True, period_end=best.get("end"),
                 fiscal_year=best.get("fy"), fiscal_period=best.get("fp"), form=best.get("form"),
-                concept=f"us-gaap:{tag}", filed=best.get("filed"), accn=best.get("accn"),
+                concept=best.get("_concept", tag), filed=best.get("filed"), accn=best.get("accn"),
+                unit=best.get("_unit"),
             )
     dei_entries = _units_for(company_facts, "EntityCommonStockSharesOutstanding", namespace="dei")
     candidates = [e for e in dei_entries if e.get("end")]
@@ -124,16 +257,18 @@ def latest_shares_outstanding(company_facts: dict[str, Any]) -> FactValue:
             value=float(best["val"]), available=True, period_end=best.get("end"),
             fiscal_year=best.get("fy"), fiscal_period=best.get("fp"), form=best.get("form"),
             concept="dei:EntityCommonStockSharesOutstanding", filed=best.get("filed"), accn=best.get("accn"),
+            unit=best.get("_unit"),
         )
     return FactValue.missing()
 
 
-def _latest_instant(company_facts: dict[str, Any], tags: Iterable[str], forms: set[str]) -> FactValue:
+def _latest_instant(company_facts: dict[str, Any], tags: Iterable[str], forms: set[str],
+                    currency: Optional[str] = None) -> FactValue:
     """Most recent instant (point-in-time) value for the first tag that has data,
     restricted to the given filing forms, picking the latest period end
     (ties broken by latest filed date)."""
     for tag in tags:
-        entries = _units_for(company_facts, tag)
+        entries = _units_for(company_facts, tag, currency=currency)
         candidates = [e for e in entries if e.get("form") in forms and e.get("end") and "start" not in e]
         if not candidates:
             continue
@@ -149,14 +284,16 @@ def _latest_instant(company_facts: dict[str, Any], tags: Iterable[str], forms: s
             fiscal_year=best.get("fy"),
             fiscal_period=best.get("fp"),
             form=best.get("form"),
-            concept=tag,
+            concept=best.get("_concept", tag),
             filed=best.get("filed"),
             accn=best.get("accn"),
+            unit=best.get("_unit"),
         )
     return FactValue.missing()
 
 
-def _annual_series(company_facts: dict[str, Any], tags: Iterable[str], duration: bool) -> list[dict[str, Any]]:
+def _annual_series(company_facts: dict[str, Any], tags: Iterable[str], duration: bool,
+                   currency: Optional[str] = None) -> list[dict[str, Any]]:
     """All annual (10-K) datapoints across every candidate tag, merged by
     fiscal year end and sorted descending. Filers often rename a concept
     partway through their filing history (e.g. Apple's "Revenues" through
@@ -166,7 +303,7 @@ def _annual_series(company_facts: dict[str, Any], tags: Iterable[str], duration:
     stale one under an abandoned tag while a newer tag has current data."""
     by_end: dict[str, dict[str, Any]] = {}
     for tag in tags:
-        entries = _units_for(company_facts, tag)
+        entries = _units_for(company_facts, tag, currency=currency)
         for e in entries:
             if e.get("form") not in ANNUAL_FORMS:
                 continue
@@ -197,7 +334,8 @@ def _annual_series(company_facts: dict[str, Any], tags: Iterable[str], duration:
     return out
 
 
-def _quarterly_series(company_facts: dict[str, Any], tags: Iterable[str], duration: bool) -> list[dict[str, Any]]:
+def _quarterly_series(company_facts: dict[str, Any], tags: Iterable[str], duration: bool,
+                      currency: Optional[str] = None) -> list[dict[str, Any]]:
     """Every individual fiscal quarter's datapoint (not just the latest),
     merged across candidate tags the same way _annual_series is, so the
     Financial Timeline's Quarterly view has one real point per quarter
@@ -208,7 +346,7 @@ def _quarterly_series(company_facts: dict[str, Any], tags: Iterable[str], durati
     accidentally a mix of single-quarter and multi-quarter totals."""
     by_end: dict[str, dict[str, Any]] = {}
     for tag in tags:
-        entries = _units_for(company_facts, tag)
+        entries = _units_for(company_facts, tag, currency=currency)
         for e in entries:
             if e.get("form") not in QUARTERLY_ELIGIBLE_FORMS:
                 continue
@@ -250,6 +388,7 @@ def _fact_from_entry(entry: Optional[dict[str, Any]]) -> FactValue:
         concept=entry.get("_concept"),
         filed=entry.get("filed"),
         accn=entry.get("accn"),
+        unit=entry.get("_unit"),
     )
 
 
@@ -365,8 +504,12 @@ def annual_shares_outstanding_series(company_facts: dict[str, Any]) -> list[Fact
     """Shares outstanding at each fiscal year end (10-K only), most recent
     first - used to compute real historical market cap / valuation
     multiples rather than applying today's share count to past years."""
-    for tag in ("CommonStockSharesOutstanding", "CommonStockSharesIssued"):
-        entries = _units_for(company_facts, tag, namespace="us-gaap")
+    for tag in ("CommonStockSharesOutstanding", "CommonStockSharesIssued",
+                "NumberOfSharesOutstanding", "IssuedCapitalNumberOfShares"):
+        # No currency constraint: these concepts are share counts by
+        # definition, and filers tag them under "shares" (and, rarely, other
+        # unit keys) - the unit actually used is recorded on the FactValue.
+        entries = _units_for(company_facts, tag)
         candidates = [e for e in entries if e.get("form") in ANNUAL_FORMS and e.get("end") and "start" not in e]
         if not candidates:
             continue
@@ -379,10 +522,25 @@ def annual_shares_outstanding_series(company_facts: dict[str, Any]) -> list[Fact
         out = list(by_end.values())
         out.sort(key=lambda e: _parse_date(e.get("end")) or date.min, reverse=True)
         return [_fact_from_entry(e) for e in out]
+    # Foreign private issuers often tag no share-count concept in their
+    # accounting taxonomy at all - fall back to the dei cover-page concept
+    # every SEC filer must report.
+    dei_entries = _units_for(company_facts, "EntityCommonStockSharesOutstanding", namespace="dei")
+    annual = [e for e in dei_entries if e.get("form") in ANNUAL_FORMS and e.get("end")]
+    if annual:
+        by_end = {}
+        for e in annual:
+            key = e.get("end")
+            prev = by_end.get(key)
+            if prev is None or (e.get("filed") or "") > (prev.get("filed") or ""):
+                by_end[key] = e
+        out = sorted(by_end.values(), key=lambda e: _parse_date(e.get("end")) or date.min, reverse=True)
+        return [_fact_from_entry(e) for e in out]
     return []
 
 
 # --- Public re-exports for other modules (quality/risk/history/market_data) ---
+units_for = _units_for
 latest_instant = _latest_instant
 annual_series = _annual_series
 quarterly_series = _quarterly_series

@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from .classification import build_classification
 from .grading import build_grading
 from .history import build_financial_timeline, build_historical_scores, explain_score_trend
 from .market_data import (
@@ -22,7 +23,7 @@ from .market_data import (
     fetch_price_history,
     fetch_stock_price,
 )
-from .normalize import build_company_financials
+from .normalize import build_company_financials, reporting_currency
 from .pillars import compute_forge_score
 from .quality import compute_financial_quality, compute_piotroski_f_score
 from .risk import compute_altman_z_score
@@ -122,6 +123,10 @@ async def _analyze_ticker(ticker_key: str, frequency: str = "annual") -> dict[st
     market_cap_val = valuation.get("market_cap", {}).get("value") if valuation.get("market_cap", {}).get("available") else None
     altman = compute_altman_z_score(company_facts, market_cap_val)
 
+    # Sector / industry / exchange / country, from SEC's own company metadata.
+    # Also carries the peer group that sector-aware interpretation keys off.
+    classification = build_classification(submissions, market_cap_val)
+
     annual_revenue_val = next(
         (t["revenue"] for t in timeline if t.get("period_end") == cf.annual.period_end and t.get("revenue") is not None),
         None,
@@ -159,9 +164,14 @@ async def _analyze_ticker(ticker_key: str, frequency: str = "annual") -> dict[st
         "ticker": cf.ticker,
         "cik": cf.cik,
         "company_name": cf.name,
-        "sector": None,
-        "industry": submissions.get("sicDescription"),
+        "sector": classification["sector"]["value"],
+        "industry": classification["industry"]["value"],
+        "sub_industry": classification["sub_industry"]["value"],
+        "exchange": classification["exchange"]["value"],
+        "country": classification["country"]["value"],
         "sic_code": submissions.get("sic"),
+        "classification": classification,
+        "reporting_currency": reporting_currency(company_facts),
         "sec_edgar_url": f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={cik}&type=10-K",
         "last_updated": None,
         "latest_quarter": {
