@@ -9,7 +9,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .classification import build_classification
@@ -281,13 +281,32 @@ _FRONTEND_DIR = Path(__file__).resolve().parent.parent.parent / "frontend"
 if _FRONTEND_DIR.exists():
     app.mount("/assets", StaticFiles(directory=str(_FRONTEND_DIR)), name="assets")
 
+    def _asset_version() -> str:
+        """Cache-busting stamp derived from the frontend files' own mtimes.
+
+        index.html references /assets/app.js and /assets/styles.css with no
+        version, so browsers happily serve a cached copy after a deploy and
+        users see the previous build's UI against the new API. Stamping the
+        current file mtime onto those URLs makes each deploy a new URL.
+        """
+        stamp = 0.0
+        for name in ("app.js", "styles.css"):
+            f = _FRONTEND_DIR / name
+            if f.exists():
+                stamp = max(stamp, f.stat().st_mtime)
+        return str(int(stamp))
+
     @app.get("/")
-    async def index() -> FileResponse:
-        return FileResponse(str(_FRONTEND_DIR / "index.html"))
+    async def index() -> HTMLResponse:
+        html = (_FRONTEND_DIR / "index.html").read_text(encoding="utf-8")
+        ver = _asset_version()
+        html = html.replace("/assets/app.js", f"/assets/app.js?v={ver}")
+        html = html.replace("/assets/styles.css", f"/assets/styles.css?v={ver}")
+        return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
 
     @app.get("/{path:path}")
     async def spa_fallback(path: str):
         candidate = _FRONTEND_DIR / path
         if candidate.is_file():
             return FileResponse(str(candidate))
-        return FileResponse(str(_FRONTEND_DIR / "index.html"))
+        return await index()
