@@ -411,21 +411,40 @@
     const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const arc = scope.querySelector(".hero-dial-arc");
     const num = scope.querySelector(".hero-score-value");
+    if (!arc && !num) return;
     const target = num ? parseFloat(num.getAttribute("data-count-to")) : 0;
-    const isNumeric = num && num.textContent.trim() !== "—";
-    if (arc) {
-      const off = arc.getAttribute("data-target-offset");
-      if (reduce) arc.style.strokeDashoffset = off;
-      else requestAnimationFrame(() => requestAnimationFrame(() => { arc.style.strokeDashoffset = off; }));
+    const hasScore = num && num.textContent.trim() !== "\u2014" && !Number.isNaN(target);
+
+    // The finished state, applied directly. Animation is an enhancement on
+    // top of this - never the only path by which the real number reaches the
+    // screen.
+    function settle() {
+      if (arc) arc.style.strokeDashoffset = arc.getAttribute("data-target-offset");
+      if (num && hasScore) num.textContent = Math.round(target);
     }
-    if (!num || !isNumeric) return;
-    if (reduce) { num.textContent = Math.round(target); return; }
+
+    // A background tab never fires requestAnimationFrame, so animating there
+    // would leave a financial score frozen at 0 - a wrong number, not merely
+    // an unpolished one. Show the real value immediately instead.
+    if (reduce || document.hidden) { settle(); return; }
+
+    if (arc) {
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        arc.style.strokeDashoffset = arc.getAttribute("data-target-offset");
+      }));
+    }
+    if (!num || !hasScore) return;
+
     const t0 = performance.now(), dur = 900;
+    let done = false;
     (function step(now) {
       const k = Math.min(1, (now - t0) / dur);
       num.textContent = Math.round(target * (1 - Math.pow(1 - k, 3)));
-      if (k < 1) requestAnimationFrame(step);
+      if (k < 1) requestAnimationFrame(step); else done = true;
     })(t0);
+    // Safety net: if the tab is hidden mid-animation, or rAF is throttled for
+    // any other reason, the correct figure is still what ends up displayed.
+    setTimeout(() => { if (!done) settle(); }, dur + 400);
   }
 
   function profileStripHtml(data) {
