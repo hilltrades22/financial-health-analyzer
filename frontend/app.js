@@ -132,13 +132,50 @@
 
   async function safeJson(resp) { try { return await resp.json(); } catch { return null; } }
 
+  // Every failure the user can actually hit gets a plain-English explanation
+  // of what happened and what to do about it. The raw server detail is kept
+  // available but tucked away - it is diagnostic, not an error message.
   function showError(ticker, status, body) {
-    const detail = (body && body.detail) || "Unknown error";
-    let msg;
-    if (status === 404) msg = `We couldn't find "${ticker}" in SEC EDGAR. Double-check the ticker symbol and try again.`;
-    else if (status === 503) msg = `SEC EDGAR appears to be unavailable right now. Please try again in a few minutes. (${detail})`;
-    else msg = `Something went wrong analyzing "${ticker}": ${detail}`;
-    errorPanel.textContent = msg;
+    const detail = (body && body.detail) || "";
+    const t = esc(ticker);
+    let kind = "generic", title, message, hint = "";
+
+    if (status === 404) {
+      kind = "notfound";
+      title = `No SEC filings found for "${t}"`;
+      message = `SEC EDGAR has no registered company under that ticker. FORGE analyses companies that file with the SEC, `
+        + `which includes US companies and foreign issuers listed here — but not funds, indices or crypto.`;
+      hint = "Check the spelling, or try a ticker like AAPL, MSFT, JPM or TSM.";
+    } else if (status === 429 || /rate.?limit/i.test(detail)) {
+      kind = "throttle";
+      title = "SEC is limiting requests right now";
+      message = "SEC EDGAR asks automated tools to stay within a modest request rate, and we have hit that limit. "
+        + "No data is missing — the request simply needs to wait.";
+      hint = "Give it a minute and try again.";
+    } else if (status === 504 || /did not complete|timed out/i.test(detail)) {
+      kind = "timeout";
+      title = `${t} took too long to analyse`;
+      message = detail || "This company's SEC dataset is unusually large and could not be processed within the time limit.";
+      hint = "Some long-established filers publish enormous datasets. Trying again may succeed once data is cached.";
+    } else if (status === 503) {
+      kind = "throttle";
+      title = "SEC EDGAR is unavailable";
+      message = "We could not reach SEC EDGAR, so there is nothing to analyse from. Rather than show partial or "
+        + "estimated figures, FORGE shows nothing at all.";
+      hint = "This is usually brief — please try again shortly.";
+    } else {
+      title = `Could not analyse "${t}"`;
+      message = "Something went wrong while building this analysis. No partial or estimated figures are shown.";
+      hint = "Try again, or try a different ticker.";
+    }
+
+    errorPanel.className = `error-panel is-${kind}`;
+    errorPanel.innerHTML = `
+      <p class="error-title">${title}</p>
+      <p class="error-body">${esc(message)}</p>
+      ${hint ? `<p class="error-hint">${esc(hint)}</p>` : ""}
+      ${detail && kind === "generic" ? `<details class="error-hint"><summary>Technical detail</summary><p>${esc(detail)}</p></details>` : ""}
+    `;
     showPanel(errorPanel);
   }
 
@@ -189,30 +226,139 @@
     return "grade-" + letter[0];
   }
 
+  // ---------- Company header + score hero ----------
+  // The page has to answer, in order: what company is this, how healthy is
+  // it, and why. The header carries identity, the dial carries the verdict,
+  // and the readout beside it carries the reasoning - so the answer and its
+  // justification are never more than one glance apart.
+
+  const STATUS_ORDER = ["FAIL", "WATCH", "PASS", "NOT_APPLICABLE", "UNAVAILABLE"];
+
+  function verdictTone(score, label) {
+    if (score === null || score === undefined) return "na";
+    if (score >= 80) return "pass";
+    if (score >= 60) return "pass";
+    if (score >= 40) return "watch";
+    return "fail";
+  }
+
+  function plainVerdict(data) {
+    const sc = data.score || {};
+    const score = sc.overall_score;
+    const name = data.company_name || data.ticker;
+    if (score === null || score === undefined) {
+      return `There isn't enough standardised SEC data to judge ${name}'s financial health.`;
+    }
+    const fails = (sc.failed_rules || []).length;
+    const watches = (sc.watch_rules || []).length;
+    if (score >= 80 && fails === 0) return `${name} looks financially strong on the measures that apply to it.`;
+    if (score >= 80) return `${name} scores strongly overall, with ${fails} measure${fails === 1 ? "" : "s"} still falling short.`;
+    if (score >= 60) return `${name} looks broadly healthy, with ${watches + fails} area${watches + fails === 1 ? "" : "s"} worth watching.`;
+    if (score >= 40) return `${name} shows real weaknesses alongside its strengths — several measures need attention.`;
+    return `${name} is failing most of the financial-health measures that apply to it.`;
+  }
+
+  // Radial dial. The arc is drawn with a stroke-dashoffset transition so the
+  // score sweeps in on load rather than snapping - motion that says "this was
+  // measured", not decoration.
+  function heroDialHtml(score, tone) {
+    const R = 78, C = 2 * Math.PI * R;
+    const pct = score === null || score === undefined ? 0 : Math.max(0, Math.min(100, score));
+    const color = tone === "pass" ? "var(--pass)" : tone === "watch" ? "var(--watch)"
+      : tone === "fail" ? "var(--fail)" : "var(--na)";
+    // Ticks give the dial the feel of a calibrated instrument.
+    let ticks = "";
+    for (let i = 0; i <= 20; i++) {
+      const a = (-90 + (i / 20) * 360) * Math.PI / 180;
+      const long = i % 5 === 0;
+      const r1 = R + 10, r2 = R + (long ? 18 : 14);
+      ticks += `<line x1="${100 + Math.cos(a) * r1}" y1="${100 + Math.sin(a) * r1}"
+        x2="${100 + Math.cos(a) * r2}" y2="${100 + Math.sin(a) * r2}"
+        stroke="var(--border)" stroke-width="${long ? 1.6 : 1}" opacity="${long ? 0.9 : 0.5}"/>`;
+    }
+    return `<div class="hero-dial">
+      <svg viewBox="0 0 200 200" role="img" aria-label="Financial health score ${score === null ? "unavailable" : score + " out of 100"}">
+        ${ticks}
+        <circle cx="100" cy="100" r="${R}" fill="none" stroke="var(--border)" stroke-width="10" opacity="0.5"/>
+        <circle class="hero-dial-arc" cx="100" cy="100" r="${R}" fill="none"
+          stroke="${color}" stroke-width="10" stroke-linecap="round"
+          transform="rotate(-90 100 100)"
+          stroke-dasharray="${C}" stroke-dashoffset="${C}"
+          data-target-offset="${C - (pct / 100) * C}"/>
+      </svg>
+      <div class="hero-dial-center">
+        <div class="hero-score-value" data-count-to="${pct}">${score === null || score === undefined ? "—" : 0}</div>
+        <div class="hero-score-max">${score === null || score === undefined ? "no score" : "out of 100"}</div>
+        <div class="hero-score-label">Financial Health</div>
+      </div>
+    </div>`;
+  }
+
+  function tallyHtml(sc) {
+    const items = [
+      ["t-pass", (sc.passed_rules || []).length, "Pass"],
+      ["t-watch", (sc.watch_rules || []).length, "Watch"],
+      ["t-fail", (sc.failed_rules || []).length, "Fail"],
+      ["t-na", (sc.not_applicable_rules || []).length, "N/A"],
+      ["t-unav", (sc.unavailable_rules || []).length, "No data"],
+    ].filter(([, n]) => n > 0);
+    return `<div class="hero-tally">${items.map(([cls, n, label]) =>
+      `<div class="tally-chip ${cls}"><span class="tally-n">${n}</span><span class="tally-l">${label}</span></div>`).join("")}</div>`;
+  }
+
+  // The measures actually moving the score, worst first - this is the "why".
+  function driversHtml(sc) {
+    const rules = (sc.rules || []).filter((r) => (r.points_available || 0) > 0);
+    const rank = (r) => STATUS_ORDER.indexOf(r.status);
+    const top = rules.slice().sort((a, b) =>
+      rank(a) - rank(b) || (b.points_available || 0) - (a.points_available || 0)).slice(0, 5);
+    if (!top.length) return "";
+    return `<div class="hero-drivers">${top.map((r) => `
+      <div class="driver-row">
+        <span class="driver-name"><strong>${esc(r.name)}</strong> &middot; ${esc(r.value || NA)}</span>
+        <span class="kpi-status status-${r.status}">${r.status === "NOT_APPLICABLE" ? "N/A" : r.status}</span>
+      </div>`).join("")}</div>`;
+  }
+
+  function companyHeaderHtml(data) {
+    const c = data.classification || {};
+    const val = data.valuation || {};
+    const price = val.price && val.price.value;
+    const mc = c.market_cap || {};
+    // Only the identifying facts belong up here; the full metadata grid lives
+    // in the profile strip so the header keeps a clear hierarchy.
+    const facts = [
+      ["Exchange", data.exchange],
+      ["Sector", data.sector],
+      ["Industry", data.industry],
+      ["Analysed as", (data.score || {}).peer_group],
+      ["Reports in", data.reporting_currency],
+    ].filter(([, v]) => v);
+    return `<div class="co-head">
+      <div>
+        <h2 class="co-name">${esc(data.company_name || data.ticker)}<span class="co-ticker">${esc(data.ticker)}</span></h2>
+        <div class="co-facts">${facts.map(([k, v]) =>
+          `<span class="co-fact">${esc(k)} <b>${esc(String(v))}</b></span>`).join("")}</div>
+      </div>
+      <div class="co-price">
+        ${price ? `<div class="co-price-value">${(val.price_currency === "USD" || !val.price_currency) ? "$" : ""}${price.toFixed(2)}</div>
+          <div class="co-price-meta">${esc(val.price_currency || "")} &middot; ${esc((val.price && val.price.as_of) || "")}</div>`
+          : `<div class="co-price-meta">Live price unavailable</div>`}
+        ${mc.available ? `<div class="co-price-meta" style="margin-top:6px">Market cap <b>${esc(fmtUsd(mc.value))}</b></div>` : ""}
+      </div>
+    </div>`;
+  }
+
   function renderDashboard(data) {
     const el = document.getElementById("dashboard-card");
+    const sc = data.score || {};
     const forge = data.forge || {};
     const grading = data.grading || {};
-    const badgeClass = "badge-" + slug(forge.label || "Insufficient Data");
-    const meta = [];
-    if (data.sector) meta.push(`Sector: ${esc(data.sector)}`);
-    if (data.industry) meta.push(`Industry: ${esc(data.industry)}`);
-    if (data.exchange) meta.push(`Exchange: ${esc(data.exchange)}`);
-    if (data.country) meta.push(`Country: ${esc(data.country)}`);
-    meta.push(`Latest Quarter: ${esc(data.latest_quarter.period_end || NA)}`);
-    meta.push(`Latest Annual: FY${esc(data.latest_annual.fiscal_year || "?")} (${esc(data.latest_annual.period_end || NA)})`);
-    if (data.valuation && data.valuation.price && data.valuation.price.value) {
-      meta.push(`Price: $${data.valuation.price.value.toFixed(2)} (${esc(data.valuation.price.as_of || "")})`);
-    }
-
-    const score = data.score || {};
-    const kpiStripHtml = `
-      <div class="kpi-strip">
-        <div class="kpi-mini k-pass"><div class="n">${(score.passed_rules || []).length}</div><div class="l">Pass</div></div>
-        <div class="kpi-mini k-watch"><div class="n">${(score.watch_rules || []).length}</div><div class="l">Watch</div></div>
-        <div class="kpi-mini k-fail"><div class="n">${(score.failed_rules || []).length}</div><div class="l">Fail</div></div>
-        <div class="kpi-mini k-na"><div class="n">${(score.unavailable_rules || []).length}</div><div class="l">Unavailable</div></div>
-      </div>`;
+    const score = sc.overall_score;
+    const tone = verdictTone(score, sc.label);
+    const toneColor = tone === "pass" ? "var(--pass-bg);color:var(--pass)"
+      : tone === "watch" ? "var(--watch-bg);color:var(--watch)"
+      : tone === "fail" ? "var(--fail-bg);color:var(--fail)" : "var(--na-bg);color:var(--na)";
 
     const pillars = grading.pillars || forge.pillars || {};
     const pillarOrder = [
@@ -221,46 +367,67 @@
     ];
     const pillarHtml = pillarOrder.map(([key, label]) => {
       const p = pillars[key] || {};
-      const val = p.score === null || p.score === undefined ? "N/A" : Math.round(p.score);
-      const pct = p.score === null || p.score === undefined ? 0 : p.score;
-      const color = p.score === null ? "var(--na)" : p.score >= 80 ? "var(--pass)" : p.score >= 60 ? "var(--pass)" : p.score >= 40 ? "var(--watch)" : "var(--fail)";
+      const has = p.score !== null && p.score !== undefined;
+      const v = has ? Math.round(p.score) : "N/A";
+      const pct = has ? p.score : 0;
+      const color = !has ? "var(--na)" : p.score >= 60 ? "var(--pass)" : p.score >= 40 ? "var(--watch)" : "var(--fail)";
       const reasons = (p.key_reasons || []).map((r) => `<li>${esc(r)}</li>`).join("");
       return `<div class="pillar-card">
         <div class="pillar-name">${label}</div>
-        <div class="pillar-value" style="color:${color}">${val}</div>
+        <div class="pillar-value" style="color:${color}">${v}</div>
         <div class="pillar-bar-track"><div class="pillar-bar-fill" style="width:${pct}%;background:${color}"></div></div>
         <div class="pillar-grade-line"><span class="pg-letter">${esc(p.letter_grade || "N/A")}</span><span>${p.contribution_pct ? p.contribution_pct + "% of score" : "excluded"}</span></div>
         ${reasons ? `<details class="pillar-detail"><summary>Why this score</summary><ul>${reasons}</ul></details>` : ""}
       </div>`;
     }).join("");
 
+    const conf = sc.data_confidence_pct;
     el.innerHTML = `
-      <div class="dash-head">
-        <div class="dash-identity">
-          <h2>${esc(data.company_name)} <span class="dash-ticker">${esc(data.ticker)}</span></h2>
-          <div class="dash-meta">${meta.map((m) => `<span>${m}</span>`).join("")}</div>
-          ${kpiStripHtml}
-        </div>
-        <div class="forge-score-box">
-          <div class="forge-score-label">FORGE Score</div>
-          <div class="forge-score-value">${forge.forge_score === null || forge.forge_score === undefined ? "N/A" : Math.round(forge.forge_score)}<span style="font-size:1.2rem;color:var(--muted)"> / 100</span></div>
-          <div class="grade-row">
-            <span class="letter-grade ${gradeClass(grading.letter_grade)}">${esc(grading.letter_grade || "N/A")}</span>
-          </div>
-          <div class="health-classification">${esc(grading.health_classification || "Insufficient Data")}</div>
-          <div class="forge-score-badge ${badgeClass}">${esc(forge.label || "Insufficient Data")}</div>
+      ${companyHeaderHtml(data)}
+      <div class="score-hero">
+        ${heroDialHtml(score, tone)}
+        <div class="hero-readout">
+          <p class="hero-question">Is this company financially healthy?</p>
+          <p class="hero-answer">${esc(plainVerdict(data))}</p>
+          <span class="hero-verdict" style="background:${toneColor}">${esc(sc.label || "Insufficient Data")}</span>
+          ${tallyHtml(sc)}
+          <p class="hero-question" style="margin-top:18px">What is driving it?</p>
+          ${driversHtml(sc)}
+          ${conf !== null && conf !== undefined && conf < 100
+            ? `<p class="hero-confidence">${conf}% of the measures considered could be scored from this company's SEC data.
+               Measures marked not-applicable or unavailable are excluded from the score rather than counted as failures.</p>`
+            : ""}
         </div>
       </div>
-      <div class="pillar-grid">${pillarHtml}</div>
+      <div class="pillar-grid" style="margin-top:26px">${pillarHtml}</div>
       ${profileStripHtml(data)}
-      <p class="kpi-formula" style="margin-top:14px">${esc(grading.grading_methodology || "")}</p>
     `;
+    animateHero(el);
   }
 
-  // --- Company profile: sector / industry / exchange / country / market cap.
-  // Sourced from SEC's own submissions metadata (SIC code + company record),
-  // never from a third-party classification vendor. Fields SEC does not
-  // report show "Unavailable" instead of being quietly dropped.
+  // Sweep the arc and count the number up once, after paint. Skipped entirely
+  // when the reader has asked for reduced motion.
+  function animateHero(scope) {
+    const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const arc = scope.querySelector(".hero-dial-arc");
+    const num = scope.querySelector(".hero-score-value");
+    const target = num ? parseFloat(num.getAttribute("data-count-to")) : 0;
+    const isNumeric = num && num.textContent.trim() !== "—";
+    if (arc) {
+      const off = arc.getAttribute("data-target-offset");
+      if (reduce) arc.style.strokeDashoffset = off;
+      else requestAnimationFrame(() => requestAnimationFrame(() => { arc.style.strokeDashoffset = off; }));
+    }
+    if (!num || !isNumeric) return;
+    if (reduce) { num.textContent = Math.round(target); return; }
+    const t0 = performance.now(), dur = 900;
+    (function step(now) {
+      const k = Math.min(1, (now - t0) / dur);
+      num.textContent = Math.round(target * (1 - Math.pow(1 - k, 3)));
+      if (k < 1) requestAnimationFrame(step);
+    })(t0);
+  }
+
   function profileStripHtml(data) {
     const c = data.classification;
     if (!c) return "";
@@ -1318,127 +1485,322 @@
     return null;
   }
 
+  // ---------- 3D: the Financial Core ----------
+  // The object is a reading of the company, not decoration. A central core
+  // carries overall health; each orbiting column is one financial dimension,
+  // its height the score and its colour the status. Dimensions that cannot be
+  // scored are drawn as hollow wireframe columns rather than short solid ones,
+  // so "we cannot measure this" never looks like "this is weak" - the same
+  // distinction the rest of the product makes in text.
+
   let model3dState = null;
+
+  const M3D_COLORS = {
+    pass: 0x35c98a, watch: 0xf2b134, fail: 0xf05a52, na: 0x6b7896, core: 0x4d97f5,
+  };
+
+  function dimensionState(key, data) {
+    const score = dimensionScore(key, data);
+    if (score === null || score === undefined) return { score: null, tone: "na", measured: false };
+    const tone = score >= 60 ? "pass" : score >= 40 ? "watch" : "fail";
+    return { score, tone, measured: true };
+  }
+
   function renderModel3D(data) {
     const el = document.getElementById("tab-model3d");
+    const sc = data.score || {};
+    const overall = sc.overall_score;
     el.innerHTML = `
       <div class="chart-box">
-        <h3>FORGE 3D Financial Model</h3>
-        <p class="model3d-hint">Drag to rotate, scroll to zoom, click a bar to see the metrics behind that dimension.</p>
+        <h3>Financial Core</h3>
+        <p class="section-note">Each column is one dimension of this company's finances: its height is that
+          dimension's score and its colour is the verdict. The core at the centre reflects overall financial
+          health — it holds steady when the company is strong and destabilises when it is not. Hollow columns
+          are dimensions that could not be scored, which is not the same as scoring badly.</p>
         <div class="model3d-wrap">
-          <div id="model3d-canvas-holder"></div>
-          <div id="model3d-detail"><p style="color:var(--muted)">Click a bar to inspect that dimension.</p></div>
+          <div id="model3d-canvas-holder">
+            <div class="m3d-hud">Drag to orbit &middot; scroll to zoom &middot; click a column</div>
+          </div>
+          <div id="model3d-detail">
+            <p class="m3d-title">Overall</p>
+            <div class="m3d-value">${overall === null || overall === undefined ? "—" : Math.round(overall)}<span style="font-size:0.8rem;color:var(--faint)"> / 100</span></div>
+            <p style="color:var(--muted);font-size:0.85rem;margin:10px 0 0">Hover or click a column to inspect that dimension.</p>
+          </div>
+        </div>
+        <div class="m3d-legend">
+          <span><i class="m3d-swatch" style="background:#35c98a"></i>Healthy</span>
+          <span><i class="m3d-swatch" style="background:#f2b134"></i>Watch</span>
+          <span><i class="m3d-swatch" style="background:#f05a52"></i>Weak</span>
+          <span><i class="m3d-swatch" style="background:transparent;box-shadow:inset 0 0 0 1px #6b7896"></i>Not scored</span>
         </div>
       </div>
     `;
     if (!window.THREE) {
-      document.getElementById("model3d-canvas-holder").innerHTML = "<p style='padding:16px;color:var(--muted)'>3D library failed to load.</p>";
+      document.getElementById("model3d-canvas-holder").innerHTML =
+        `<div class="empty-note" style="margin:18px">The 3D view needs WebGL and the Three.js library, which did not load.
+         Every figure it shows is also available in the other tabs.</div>`;
       return;
     }
-    setup3D(data);
+    try { setup3D(data); } catch (err) {
+      document.getElementById("model3d-canvas-holder").innerHTML =
+        `<div class="empty-note" style="margin:18px">The 3D view could not start in this browser.
+         Every figure it shows is also available in the other tabs.</div>`;
+    }
   }
 
   function setup3D(data) {
     const holder = document.getElementById("model3d-canvas-holder");
     const detail = document.getElementById("model3d-detail");
-    const width = holder.clientWidth, height = holder.clientHeight;
+    const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const isDark = root.getAttribute("data-theme") === "dark" ||
+      (!root.getAttribute("data-theme") && window.matchMedia("(prefers-color-scheme: dark)").matches);
+
+    const width = holder.clientWidth || 640;
+    const height = holder.clientHeight || 480;
 
     const scene = new THREE.Scene();
-    const isDark = root.getAttribute("data-theme") === "dark";
-    scene.background = new THREE.Color(isDark ? 0x171e2b : 0xf5f6f8);
+    scene.background = new THREE.Color(isDark ? 0x060910 : 0xe4e7ee);
+    scene.fog = new THREE.Fog(scene.background.getHex(), 14, 30);
 
-    const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 100);
-    camera.position.set(6, 6, 9);
+    const camera = new THREE.PerspectiveCamera(42, width / height, 0.1, 100);
+    camera.position.set(7.5, 5.5, 9);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.setSize(width, height);
+    const hud = holder.querySelector(".m3d-hud");
     holder.innerHTML = "";
+    if (hud) holder.appendChild(hud);
     holder.appendChild(renderer.domElement);
 
     const controls = new THREE.OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
-    controls.minDistance = 4; controls.maxDistance = 20;
+    controls.dampingFactor = 0.07;
+    controls.minDistance = 6;
+    controls.maxDistance = 22;
+    controls.maxPolarAngle = Math.PI * 0.52;
+    controls.enablePan = false;
+    controls.autoRotate = !reduce;
+    controls.autoRotateSpeed = 0.45;
 
-    scene.add(new THREE.AmbientLight(0xffffff, 0.7));
-    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-    dirLight.position.set(5, 10, 7);
-    scene.add(dirLight);
+    scene.add(new THREE.AmbientLight(0xffffff, isDark ? 0.55 : 0.8));
+    const key = new THREE.DirectionalLight(0xffffff, isDark ? 0.9 : 0.75);
+    key.position.set(6, 12, 8);
+    scene.add(key);
+    const rim = new THREE.DirectionalLight(M3D_COLORS.core, isDark ? 0.5 : 0.25);
+    rim.position.set(-8, 4, -6);
+    scene.add(rim);
 
-    const grid = new THREE.GridHelper(8, 8, 0x888888, isDark ? 0x2a3446 : 0xdde1e7);
-    scene.add(grid);
+    // --- Base plate: a calibrated disc rather than a generic grid ---------
+    const baseGroup = new THREE.Group();
+    const discMat = new THREE.MeshBasicMaterial({
+      color: isDark ? 0x121824 : 0xffffff, transparent: true, opacity: isDark ? 0.55 : 0.75,
+    });
+    const disc = new THREE.Mesh(new THREE.CircleGeometry(4.6, 64), discMat);
+    disc.rotation.x = -Math.PI / 2;
+    disc.position.y = -0.01;
+    baseGroup.add(disc);
+    [2.4, 3.5, 4.6].forEach((r) => {
+      const ring = new THREE.Mesh(
+        new THREE.RingGeometry(r - 0.012, r + 0.012, 96),
+        new THREE.MeshBasicMaterial({ color: isDark ? 0x263047 : 0xd8dde6, side: THREE.DoubleSide })
+      );
+      ring.rotation.x = -Math.PI / 2;
+      baseGroup.add(ring);
+    });
+    scene.add(baseGroup);
 
-    const n = DIMENSION_DEFS.length;
-    const radius = 3;
-    const bars = [];
-    const barColor = (score) => {
-      if (score === null || score === undefined) return 0x93a0b8;
-      if (score >= 80) return 0x2ecc71;
-      if (score >= 60) return 0x2ecc71;
-      if (score >= 40) return 0xf5b642;
-      return 0xe05656;
-    };
+    // --- The core: overall financial health -------------------------------
+    const sc = data.score || {};
+    const overall = sc.overall_score;
+    const hasOverall = overall !== null && overall !== undefined;
+    const coreTone = !hasOverall ? "na" : overall >= 60 ? "pass" : overall >= 40 ? "watch" : "fail";
+    const coreColor = M3D_COLORS[coreTone];
+    // A healthy core is tight and bright; a weak one is smaller and dimmer.
+    const coreScale = hasOverall ? 0.62 + (overall / 100) * 0.5 : 0.55;
 
-    DIMENSION_DEFS.forEach((dim, i) => {
+    const coreGroup = new THREE.Group();
+    const coreMesh = new THREE.Mesh(
+      new THREE.IcosahedronGeometry(coreScale, 1),
+      new THREE.MeshStandardMaterial({
+        color: coreColor, roughness: 0.32, metalness: 0.45,
+        emissive: coreColor, emissiveIntensity: hasOverall ? 0.16 + (overall / 100) * 0.3 : 0.08,
+        flatShading: true,
+      })
+    );
+    coreGroup.add(coreMesh);
+    const coreShell = new THREE.Mesh(
+      new THREE.IcosahedronGeometry(coreScale * 1.45, 1),
+      new THREE.MeshBasicMaterial({ color: coreColor, wireframe: true, transparent: true, opacity: 0.22 })
+    );
+    coreGroup.add(coreShell);
+    coreGroup.position.y = 1.9;
+    scene.add(coreGroup);
+
+    // --- One column per financial dimension -------------------------------
+    const dims = DIMENSION_DEFS;
+    const n = dims.length;
+    const radius = 3.2;
+    const columns = [];
+
+    dims.forEach((dim, i) => {
       const angle = (i / n) * Math.PI * 2;
       const x = Math.cos(angle) * radius;
       const z = Math.sin(angle) * radius;
-      const score = dimensionScore(dim.key, currentData);
-      const h = Math.max(0.3, ((score === null ? 10 : score) / 100) * 4);
-      const geo = new THREE.BoxGeometry(0.7, h, 0.7);
-      const mat = new THREE.MeshStandardMaterial({ color: barColor(score) });
-      const bar = new THREE.Mesh(geo, mat);
-      bar.position.set(x, h / 2, z);
-      bar.userData = { dim };
-      scene.add(bar);
-      bars.push(bar);
+      const st = dimensionState(dim.key, data);
+      const h = st.measured ? Math.max(0.35, (st.score / 100) * 3.6) : 1.2;
+      const color = M3D_COLORS[st.tone];
+
+      const geo = new THREE.CylinderGeometry(0.34, 0.38, h, 6);
+      // Unmeasured dimensions are hollow: "not scored" must never read as "weak".
+      const mat = st.measured
+        ? new THREE.MeshStandardMaterial({ color, roughness: 0.4, metalness: 0.3,
+            emissive: color, emissiveIntensity: 0.1 })
+        : new THREE.MeshBasicMaterial({ color, wireframe: true, transparent: true, opacity: 0.5 });
+      const col = new THREE.Mesh(geo, mat);
+      col.position.set(x, h / 2, z);
+      col.userData = { dim, st, baseY: h / 2, height: h };
+      scene.add(col);
+      columns.push(col);
+
+      // A strut tying each dimension back to the core.
+      const from = new THREE.Vector3(x, h, z);
+      const to = new THREE.Vector3(0, coreGroup.position.y, 0);
+      const strut = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints([from, to]),
+        new THREE.LineBasicMaterial({ color, transparent: true, opacity: st.measured ? 0.3 : 0.12 })
+      );
+      scene.add(strut);
+      col.userData.strut = strut;
 
       const canvas = document.createElement("canvas");
-      canvas.width = 256; canvas.height = 64;
+      canvas.width = 320; canvas.height = 72;
       const ctx = canvas.getContext("2d");
-      ctx.fillStyle = isDark ? "#e7ebf2" : "#1b2430";
-      ctx.font = "bold 34px Segoe UI";
+      ctx.fillStyle = isDark ? "#dfe5f0" : "#131a26";
+      ctx.font = "600 30px ui-monospace, SFMono-Regular, Menlo, monospace";
       ctx.textAlign = "center";
-      ctx.fillText(dim.label, 128, 44);
-      const tex = new THREE.CanvasTexture(canvas);
-      const labelMat = new THREE.SpriteMaterial({ map: tex, transparent: true });
-      const sprite = new THREE.Sprite(labelMat);
-      sprite.scale.set(2, 0.5, 1);
-      sprite.position.set(x, h + 0.5, z);
+      ctx.fillText(dim.label.toUpperCase(), 160, 44);
+      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: new THREE.CanvasTexture(canvas), transparent: true, depthTest: false,
+      }));
+      sprite.scale.set(2.3, 0.52, 1);
+      sprite.position.set(x, h + 0.55, z);
       scene.add(sprite);
+      col.userData.sprite = sprite;
     });
 
+    // --- Interaction ------------------------------------------------------
     const raycaster = new THREE.Raycaster();
-    const mouse = new THREE.Vector2();
-    function showDetail(dim) {
-      const rows = dim.metrics(currentData).map(([k, v]) => `<div style="display:flex;justify-content:space-between;padding:4px 0;border-top:1px solid var(--border)"><span style="color:var(--muted)">${esc(k)}</span><strong>${esc(v)}</strong></div>`).join("");
-      detail.innerHTML = `<h4 style="margin-top:0">${esc(dim.label.toUpperCase())}</h4>${rows}`;
-    }
-    renderer.domElement.addEventListener("click", (ev) => {
-      const rect = renderer.domElement.getBoundingClientRect();
-      mouse.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
-      mouse.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
-      raycaster.setFromCamera(mouse, camera);
-      const hits = raycaster.intersectObjects(bars);
-      if (hits.length) showDetail(hits[0].object.userData.dim);
-    });
+    const pointer = new THREE.Vector2();
+    let hovered = null, pinned = null;
 
+    function renderDetail(col) {
+      if (!col) {
+        detail.innerHTML = `<p class="m3d-title">Overall</p>
+          <div class="m3d-value">${hasOverall ? Math.round(overall) : "—"}<span style="font-size:0.8rem;color:var(--faint)"> / 100</span></div>
+          <p style="color:var(--muted);font-size:0.85rem;margin:10px 0 0">Hover or click a column to inspect that dimension.</p>`;
+        return;
+      }
+      const { dim, st } = col.userData;
+      let rows = "";
+      try {
+        rows = dim.metrics(currentData).map(([k, v]) =>
+          `<div class="m3d-row"><span>${esc(k)}</span><strong>${esc(v == null ? NA : String(v))}</strong></div>`).join("");
+      } catch (e) { rows = `<div class="m3d-row"><span>Detail unavailable</span></div>`; }
+      const chip = st.measured
+        ? `<span class="kpi-status status-${st.tone === "pass" ? "PASS" : st.tone === "watch" ? "WATCH" : "FAIL"}">${st.tone === "pass" ? "HEALTHY" : st.tone === "watch" ? "WATCH" : "WEAK"}</span>`
+        : `<span class="kpi-status status-UNAVAILABLE">NOT SCORED</span>`;
+      detail.innerHTML = `<p class="m3d-title">${esc(dim.label)}</p>
+        <div class="m3d-value">${st.measured ? Math.round(st.score) : "—"}${st.measured ? '<span style="font-size:0.8rem;color:var(--faint)"> / 100</span>' : ""}</div>
+        <div style="margin:8px 0 4px">${chip}</div>
+        ${rows}`;
+    }
+
+    function setHover(col) {
+      if (hovered === col) return;
+      if (hovered && hovered !== pinned) {
+        hovered.material.emissiveIntensity !== undefined && (hovered.material.emissiveIntensity = 0.1);
+        hovered.userData.strut.material.opacity = hovered.userData.st.measured ? 0.3 : 0.12;
+      }
+      hovered = col;
+      if (col) {
+        if (col.material.emissiveIntensity !== undefined) col.material.emissiveIntensity = 0.45;
+        col.userData.strut.material.opacity = 0.8;
+        renderDetail(col);
+        renderer.domElement.style.cursor = "pointer";
+      } else {
+        renderer.domElement.style.cursor = "grab";
+        if (!pinned) renderDetail(null);
+      }
+    }
+
+    function pick(ev) {
+      const rect = renderer.domElement.getBoundingClientRect();
+      const src = ev.touches ? ev.touches[0] : ev;
+      pointer.x = ((src.clientX - rect.left) / rect.width) * 2 - 1;
+      pointer.y = -((src.clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(pointer, camera);
+      const hits = raycaster.intersectObjects(columns);
+      return hits.length ? hits[0].object : null;
+    }
+
+    const onMove = (ev) => { if (!pinned) setHover(pick(ev)); };
+    const onClick = (ev) => {
+      const col = pick(ev);
+      pinned = (pinned === col) ? null : col;
+      if (pinned) { setHover(null); hovered = pinned; renderDetail(pinned); }
+      else renderDetail(null);
+      controls.autoRotate = !reduce && !pinned;
+    };
+    renderer.domElement.addEventListener("pointermove", onMove);
+    renderer.domElement.addEventListener("click", onClick);
+    renderer.domElement.addEventListener("pointerleave", () => { if (!pinned) setHover(null); });
+
+    // --- Animation --------------------------------------------------------
+    // Instability is proportional to poor health: a strong company's core sits
+    // almost still, a failing one visibly wavers. Subtle by design.
+    const instability = hasOverall ? Math.max(0, (60 - overall) / 60) : 0.5;
+    const clock = new THREE.Clock();
     let frameId;
+
     function animate() {
       frameId = requestAnimationFrame(animate);
+      const t = clock.getElapsedTime();
+      if (!reduce) {
+        coreGroup.rotation.y = t * 0.22;
+        coreShell.rotation.y = -t * 0.34;
+        coreShell.rotation.x = t * 0.12;
+        coreGroup.position.y = 1.9 + Math.sin(t * 1.4) * 0.05 * (0.4 + instability);
+        coreGroup.rotation.z = Math.sin(t * 2.1) * 0.05 * instability;
+        coreGroup.rotation.x = Math.cos(t * 1.7) * 0.05 * instability;
+      }
       controls.update();
       renderer.render(scene, camera);
     }
     animate();
 
-    if (model3dState && model3dState.frameId) cancelAnimationFrame(model3dState.frameId);
-    model3dState = { frameId };
-    window.addEventListener("resize", () => {
+    if (model3dState) {
+      if (model3dState.frameId) cancelAnimationFrame(model3dState.frameId);
+      if (model3dState.dispose) model3dState.dispose();
+    }
+    const onResize = () => {
       if (!holder.isConnected) return;
       const w = holder.clientWidth, h = holder.clientHeight;
-      if (w === 0 || h === 0) return;
-      camera.aspect = w / h; camera.updateProjectionMatrix();
+      if (!w || !h) return;
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
       renderer.setSize(w, h);
-    });
+    };
+    window.addEventListener("resize", onResize);
+    model3dState = {
+      frameId,
+      dispose() {
+        window.removeEventListener("resize", onResize);
+        renderer.domElement.removeEventListener("pointermove", onMove);
+        renderer.domElement.removeEventListener("click", onClick);
+        try { renderer.dispose(); } catch (e) { /* nothing useful to do */ }
+      },
+    };
   }
 
   // ---------- Compare tab ----------
