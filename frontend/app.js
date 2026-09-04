@@ -329,9 +329,10 @@
     // in the profile strip so the header keeps a clear hierarchy.
     const facts = [
       ["Exchange", data.exchange],
+      ["Location", data.location],
       ["Sector", data.sector],
       ["Industry", data.industry],
-      ["Analysed as", (data.score || {}).peer_group],
+      ["Analysed as", c.peer_group_label || (data.score || {}).peer_group],
       ["Reports in", data.reporting_currency],
     ].filter(([, v]) => v);
     return `<div class="co-head">
@@ -452,9 +453,10 @@
     if (!c) return "";
     const cell = (label, field) => {
       const val = field && field.available ? field.value : null;
+      const why = field && field.reason ? field.reason : "Not reported in SEC data for this company";
       return `<div class="profile-cell">
         <div class="profile-label">${esc(label)}</div>
-        <div class="profile-value${val ? "" : " profile-na"}">${val ? esc(String(val)) : "Unavailable"}</div>
+        <div class="profile-value${val ? "" : " profile-na"}"${val ? "" : ` title="${esc(why)}"`}>${val ? esc(String(val)) : "Unavailable"}</div>
       </div>`;
     };
     const mc = c.market_cap || {};
@@ -462,14 +464,19 @@
     const currency = data.reporting_currency
       ? { available: true, value: data.reporting_currency }
       : { available: false };
+    const asField = (v) => (v ? { available: true, value: v } : { available: false });
     const note = (data.valuation && data.valuation.currency_note) || "";
     return `
       <div class="profile-strip">
         ${cell("Sector", c.sector)}
         ${cell("Industry", c.industry)}
         ${cell("Sub-Industry", c.sub_industry)}
+        ${cell("Peer Group", asField(c.peer_group_label))}
         ${cell("Exchange", c.exchange)}
-        ${cell("Country", c.country)}
+        ${cell("Location", c.location)}
+        ${cell("Incorporated In", c.state_of_incorporation)}
+        ${cell("Accounting", asField(data.accounting_framework))}
+        ${cell("Annual Filing", asField(data.filing_type))}
         ${cell("Market Cap", mcField)}
         ${cell("Reports In", currency)}
       </div>
