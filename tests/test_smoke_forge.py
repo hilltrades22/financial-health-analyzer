@@ -98,6 +98,8 @@ def _mock_market_data():
 @respx.mock
 async def test_full_forge_payload_smoke():
     respx.get("https://www.sec.gov/files/company_tickers.json").mock(return_value=httpx.Response(200, json=TICKER_MAP))
+    respx.get(url__regex=r"https://data\.sec\.gov/api/xbrl/companyconcept/.*").mock(
+        return_value=httpx.Response(404))
     respx.get("https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json").mock(return_value=httpx.Response(200, json=FAKE_FACTS))
     respx.get("https://data.sec.gov/submissions/CIK0000320193.json").mock(return_value=httpx.Response(200, json={"sicDescription": "Electronic Computers", "sic": "3571"}))
     _mock_market_data()

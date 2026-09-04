@@ -79,6 +79,10 @@ async def test_valid_ticker_returns_normalized_data():
     respx.get("https://www.sec.gov/files/company_tickers.json").mock(
         return_value=httpx.Response(200, json=TICKER_MAP)
     )
+    # No concept resolves, so the analysis must fall back to the full
+    # company-facts payload - the path these tests exercise.
+    respx.get(url__regex=r"https://data\.sec\.gov/api/xbrl/companyconcept/.*").mock(
+        return_value=httpx.Response(404))
     respx.get("https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json").mock(
         return_value=httpx.Response(200, json=FAKE_COMPANY_FACTS)
     )
@@ -101,6 +105,10 @@ async def test_sec_unavailable_returns_503():
     respx.get("https://www.sec.gov/files/company_tickers.json").mock(
         return_value=httpx.Response(200, json=TICKER_MAP)
     )
+    # No concept resolves, so the analysis must fall back to the full
+    # company-facts payload - the path these tests exercise.
+    respx.get(url__regex=r"https://data\.sec\.gov/api/xbrl/companyconcept/.*").mock(
+        return_value=httpx.Response(404))
     respx.get("https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json").mock(
         return_value=httpx.Response(503)
     )

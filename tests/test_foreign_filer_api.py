@@ -55,6 +55,8 @@ def clear_cache():
 @respx.mock
 async def test_foreign_private_issuer_returns_a_real_analysis():
     respx.get("https://www.sec.gov/files/company_tickers.json").mock(return_value=httpx.Response(200, json=TICKER_MAP))
+    respx.get(url__regex=r"https://data\.sec\.gov/api/xbrl/companyconcept/.*").mock(
+        return_value=httpx.Response(404))
     respx.get("https://data.sec.gov/api/xbrl/companyfacts/CIK0001046179.json").mock(
         return_value=httpx.Response(200, json=IFRS_FACTS))
     respx.get("https://data.sec.gov/submissions/CIK0001046179.json").mock(
