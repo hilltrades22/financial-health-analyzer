@@ -5,7 +5,7 @@ import os
 import time
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .classification import build_classification
+from .concepts import build_facts_bundle
 from .grading import build_grading
 from .history import build_financial_timeline, build_historical_scores, explain_score_trend
 from .insiders import build_insider_activity
@@ -69,6 +70,49 @@ _CACHE_TTL = 15 * 60
 _cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
 
+def _has_financial_concepts(company_facts: dict[str, Any]) -> bool:
+    """True when at least one accounting concept actually resolved.
+
+    Testing the truthiness of the whole "facts" mapping is not enough: a
+    bundle whose taxonomy was detected but whose every concept came back
+    empty is {"us-gaap": {}}, which is itself truthy, so the Company Facts
+    fallback would never fire and the reader would get an analysis with no
+    financials in it. The "dei" bucket does not count either - it carries
+    only a cover-page share count, which alone analyses nothing.
+    """
+    for taxonomy, tags in (company_facts.get("facts") or {}).items():
+        if taxonomy != "dei" and tags:
+            return True
+    return False
+
+
+def _framework_label(company_facts: dict[str, Any]) -> Optional[str]:
+    """'ifrs-full' is a taxonomy identifier, not something to show a reader."""
+    taxonomies = list((company_facts.get("facts") or {}).keys())
+    if "ifrs-full" in taxonomies:
+        return "IFRS"
+    if "us-gaap" in taxonomies:
+        return "US GAAP"
+    return None
+
+
+def _filing_type_label(cf) -> Optional[str]:
+    """The annual form this company files, with the plain-English meaning of
+    the less familiar ones spelled out."""
+    annual_form = getattr(cf.annual.operating_cash_flow, "form", None) \
+        or getattr(cf.annual.retained_earnings, "form", None)
+    form = (annual_form or cf.quarterly.form or "").strip()
+    meanings = {
+        "10-K": "10-K (US annual report)",
+        "20-F": "20-F (foreign private issuer annual report)",
+        "40-F": "40-F (Canadian annual report)",
+        "10-Q": "10-Q (US quarterly report)",
+        "6-K": "6-K (foreign issuer interim report)",
+    }
+    base = form.replace("/A", "")
+    return meanings.get(base, form or None)
+
+
 def _fact_to_dict(fv) -> dict[str, Any]:
     return asdict(fv)
 
@@ -98,12 +142,28 @@ async def _analyze_ticker(ticker_key: str, frequency: str = "annual") -> dict[st
     cik = resolved["cik"]
     name = resolved["title"]
 
+    # Retrieve only the concepts the analysis reads, rather than the filer's
+    # entire company-facts payload. For a long-established filer that payload
+    # runs to well over 100 MB; the targeted bundle is a few hundred KB and
+    # has exactly the same shape, so nothing downstream changes.
+    company_facts: dict[str, Any] = {}
     try:
-        company_facts = await _sec_client.get_company_facts(cik)
-    except TickerNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        company_facts = await build_facts_bundle(_sec_client, cik, name or ticker_key)
     except SecUnavailableError as exc:
         raise HTTPException(status_code=503, detail=f"SEC EDGAR is currently unavailable: {exc}") from exc
+    except Exception:  # noqa: BLE001 - fall back rather than fail the request
+        company_facts = {}
+
+    if not _has_financial_concepts(company_facts):
+        # No concept resolved - either the filer reports under a taxonomy we
+        # did not probe, or SEC returned nothing. Fall back to the full
+        # company-facts payload so coverage never regresses versus before.
+        try:
+            company_facts = await _sec_client.get_company_facts(cik)
+        except TickerNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except SecUnavailableError as exc:
+            raise HTTPException(status_code=503, detail=f"SEC EDGAR is currently unavailable: {exc}") from exc
 
     submissions: dict[str, Any] = {}
     try:
@@ -228,7 +288,12 @@ async def _analyze_ticker(ticker_key: str, frequency: str = "annual") -> dict[st
         "country": classification["country"]["value"],
         "sic_code": submissions.get("sic"),
         "classification": classification,
+        "location": classification["location"]["value"],
         "reporting_currency": reporting_currency(company_facts),
+        # Reader-facing labels for things SEC reports as raw identifiers, so
+        # the profile reads like a product rather than a database dump.
+        "accounting_framework": _framework_label(company_facts),
+        "filing_type": _filing_type_label(cf),
         "sec_edgar_url": f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={cik}&type=10-K",
         "last_updated": None,
         "latest_quarter": {
@@ -300,6 +365,8 @@ async def _analyze_ticker(ticker_key: str, frequency: str = "annual") -> dict[st
             "repurchases_of_stock": _fact_to_dict(cf.annual.repurchases_of_stock),
             "treasury_stock": _fact_to_dict(cf.annual.treasury_stock),
         },
+        "retrieval": {**(company_facts.get("_forge_retrieval") or {"mode": "companyfacts"}),
+                      "cache": _sec_client.cache_stats()},
         "data_source": "SEC EDGAR (data.sec.gov) - XBRL Company Facts, Submissions, and ticker/CIK mapping. No demo or fabricated data.",
         "market_data_source": "Yahoo Finance (query1.finance.yahoo.com), with Stooq.com as a fallback - used only for live price / market cap / valuation multiples / price history, clearly separate from SEC data.",
     }

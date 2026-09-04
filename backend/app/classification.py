@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from .location import build_location
+
 # Standard SIC divisions (ranges are the published SIC structure). The
 # "sector" is the division; the "industry" is SEC's own sicDescription for
 # the specific 4-digit code, so it stays exactly as the filer is classified.
@@ -131,20 +133,12 @@ def build_classification(submissions: dict[str, Any], market_cap: Optional[float
     # A company with several listed share classes repeats the same exchange
     # once per class (Alphabet returns Nasdaq four times) - list each once.
     exchanges = list(dict.fromkeys(e for e in (submissions.get("exchanges") or []) if e))
-    addresses = submissions.get("addresses") or {}
-    business = addresses.get("business") or {}
-    mailing = addresses.get("mailing") or {}
-    country = (
-        business.get("stateOrCountryDescription")
-        or business.get("country")
-        or mailing.get("stateOrCountryDescription")
-        or mailing.get("country")
-    )
-    # SEC uses a two-letter code for US states and a country code otherwise;
-    # a US state means the business address is in the United States.
-    state_or_country = business.get("stateOrCountry") or mailing.get("stateOrCountry")
-    if not country and state_or_country and len(str(state_or_country)) == 2 and str(state_or_country).isalpha():
-        country = "United States" if str(state_or_country).isupper() else None
+    # Principal business location, expanded from SEC's raw codes. SEC reports
+    # "CUPERTINO" / "CA" and gives no expanded state name at all, so showing
+    # it verbatim reads like a database dump; location.py handles the casing
+    # and code expansion, and keeps state of incorporation as a separate fact.
+    location = build_location(submissions)
+    country = location.get("country")
 
     def field(value: Any, source: str) -> dict[str, Any]:
         return {
@@ -162,7 +156,18 @@ def build_classification(submissions: dict[str, Any], market_cap: Optional[float
         "exchange": field(", ".join(exchanges) if exchanges else None, sec_src),
         "exchanges": exchanges,
         "country": field(country, sec_src),
-        "state_of_incorporation": field(submissions.get("stateOfIncorporation") or None, sec_src),
+        "location": {
+            "available": location["available"],
+            "value": location["display"],
+            "city": location["city"],
+            "region": location["region"],
+            "country": location["country"],
+            "source": location["source"],
+            "reason": location["reason"],
+        },
+        "state_of_incorporation": field(location.get("state_of_incorporation"),
+                                        "SEC EDGAR submissions - jurisdiction of incorporation, "
+                                        "which is separate from where the company operates"),
         "fiscal_year_end": field(submissions.get("fiscalYearEnd") or None, sec_src),
         "entity_type": field(submissions.get("entityType") or None, sec_src),
         "market_cap": {
@@ -171,6 +176,7 @@ def build_classification(submissions: dict[str, Any], market_cap: Optional[float
             "source": "Live market price x SEC-reported shares outstanding" if market_cap is not None else None,
         },
         "peer_group": peer_group,
+        "peer_group_label": peer_group.replace("_", " ").title() if peer_group else None,
         "peer_group_note": PEER_GROUP_NOTES.get(peer_group, PEER_GROUP_NOTES["general"]),
         "source": sec_src,
     }

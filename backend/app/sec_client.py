@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import time
 import asyncio
+from collections import OrderedDict
 from typing import Any, Optional
 
 import httpx
@@ -21,6 +22,14 @@ SEC_USER_AGENT = os.environ.get("SEC_USER_AGENT", "").strip()
 TICKER_MAP_URL = "https://www.sec.gov/files/company_tickers.json"
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik10}.json"
 COMPANY_FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik10}.json"
+COMPANY_CONCEPT_URL = "https://data.sec.gov/api/xbrl/companyconcept/CIK{cik10}/{taxonomy}/{concept}.json"
+
+# Financial facts change only when a filing is published, so they can be
+# cached far longer than a market price. The cache is bounded: SEC data is a
+# convenience here, not a store of record, and an unbounded dict on a small
+# instance is a memory leak waiting to happen.
+_CONCEPT_TTL_SECONDS = int(os.environ.get("SEC_CONCEPT_CACHE_TTL", str(6 * 3600)))
+_CONCEPT_CACHE_MAX = int(os.environ.get("SEC_CONCEPT_CACHE_MAX", "4000"))
 
 _DEFAULT_TIMEOUT = httpx.Timeout(15.0, connect=10.0)
 
@@ -106,11 +115,26 @@ class _RateLimiter:
 
     def __init__(self, requests_per_second: float = 5.0):
         self._min_interval = 1.0 / requests_per_second
-        self._lock = asyncio.Lock()
+        # An asyncio.Lock binds to the loop it was first awaited on, so it is
+        # created lazily per running loop rather than at import time. In
+        # production there is only ever one loop; this also keeps the limiter
+        # usable from any short-lived loop (tests, scripts, workers).
+        self._locks: "dict[Any, asyncio.Lock]" = {}
         self._last = 0.0
 
+    def _lock_for_loop(self) -> asyncio.Lock:
+        loop = asyncio.get_running_loop()
+        lock = self._locks.get(loop)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._locks[loop] = lock
+            # Drop locks for loops that have gone away so this cannot grow.
+            for dead in [l for l in self._locks if l.is_closed()]:
+                self._locks.pop(dead, None)
+        return lock
+
     async def acquire(self) -> None:
-        async with self._lock:
+        async with self._lock_for_loop():
             now = time.monotonic()
             wait = self._min_interval - (now - self._last)
             if wait > 0:
@@ -120,6 +144,47 @@ class _RateLimiter:
 
 # Shared across every SecClient instance and every request in the process.
 _rate_limiter = _RateLimiter(float(os.environ.get("SEC_REQUESTS_PER_SECOND", "5")))
+
+
+class _ConceptCache:
+    """Bounded TTL cache for per-concept payloads.
+
+    A miss is cached too (as None): a filer that does not report a concept
+    will never start reporting it mid-session, and re-asking SEC for a known
+    404 on every analysis is exactly the kind of avoidable traffic the rate
+    limiter exists to prevent.
+    """
+
+    def __init__(self, ttl: int, max_entries: int):
+        self._ttl = ttl
+        self._max = max_entries
+        self._data: "OrderedDict[tuple, tuple[float, Any]]" = OrderedDict()
+
+    def get(self, key: tuple) -> tuple[bool, Any]:
+        entry = self._data.get(key)
+        if entry is None:
+            return False, None
+        stamp, value = entry
+        if (time.time() - stamp) > self._ttl:
+            self._data.pop(key, None)
+            return False, None
+        self._data.move_to_end(key)
+        return True, value
+
+    def put(self, key: tuple, value: Any) -> None:
+        self._data[key] = (time.time(), value)
+        self._data.move_to_end(key)
+        while len(self._data) > self._max:
+            self._data.popitem(last=False)
+
+    def stats(self) -> dict[str, int]:
+        return {"entries": len(self._data), "max_entries": self._max, "ttl_seconds": self._ttl}
+
+
+_concept_cache = _ConceptCache(_CONCEPT_TTL_SECONDS, _CONCEPT_CACHE_MAX)
+# In-flight requests, so two analyses needing the same concept at the same
+# moment produce one SEC request rather than two.
+_inflight: dict[tuple, "asyncio.Future"] = {}
 
 
 class SecClient:
@@ -195,6 +260,75 @@ class SecClient:
         if resp.status_code != 200:
             raise SecUnavailableError(f"SEC EDGAR filing file returned {resp.status_code}")
         return resp.content
+
+    async def get_company_concept(self, cik: int, taxonomy: str, concept: str) -> Optional[dict[str, Any]]:
+        """One concept's full reported history.
+
+        Returns None when the filer does not report it - a normal outcome,
+        not an error. Results (including misses) are cached, and concurrent
+        callers asking for the same concept share a single request.
+        """
+        key = (cik, taxonomy, concept)
+        hit, cached = _concept_cache.get(key)
+        if hit:
+            return cached
+
+        existing = _inflight.get(key)
+        if existing is not None:
+            return await asyncio.shield(existing)
+
+        loop = asyncio.get_running_loop()
+        future: "asyncio.Future" = loop.create_future()
+        _inflight[key] = future
+        try:
+            result = await self._fetch_company_concept(cik, taxonomy, concept)
+            _concept_cache.put(key, result)
+            if not future.done():
+                future.set_result(result)
+            return result
+        except BaseException as exc:
+            if not future.done():
+                future.set_exception(exc)
+                # The caller that raised is the one reporting this failure. If
+                # no other coroutine happened to be waiting on the shared
+                # future, nobody retrieves its exception and asyncio logs a
+                # spurious "Future exception was never retrieved" for every
+                # concept - dozens of lines per throttled analysis. Marking it
+                # retrieved here keeps the real error on the caller's path and
+                # the noise out of the logs.
+                future.add_done_callback(
+                    lambda f: None if f.cancelled() else f.exception())
+            raise
+        finally:
+            _inflight.pop(key, None)
+
+    async def _fetch_company_concept(self, cik: int, taxonomy: str,
+                                     concept: str) -> Optional[dict[str, Any]]:
+        cik10 = str(cik).zfill(10)
+        url = COMPANY_CONCEPT_URL.format(cik10=cik10, taxonomy=taxonomy, concept=concept)
+        headers = _headers().copy()
+        headers["Host"] = "data.sec.gov"
+        try:
+            await _rate_limiter.acquire()
+            resp = await self._client.get(url, headers=headers, timeout=_DEFAULT_TIMEOUT)
+        except httpx.HTTPError as exc:
+            raise SecUnavailableError(f"Could not reach SEC EDGAR company concept API: {exc}") from exc
+        if resp.status_code == 404:
+            return None  # this filer simply does not report this concept
+        if resp.status_code == 429:
+            raise SecUnavailableError(
+                "SEC EDGAR is rate-limiting this service (HTTP 429). SEC asks automated clients to stay within "
+                "a modest request rate; please wait a moment and try again.")
+        if resp.status_code != 200:
+            raise SecUnavailableError(f"SEC EDGAR company concept API returned {resp.status_code}")
+        try:
+            return resp.json()
+        except ValueError as exc:
+            raise SecUnavailableError(f"SEC EDGAR company concept API returned non-JSON content: {exc}") from exc
+
+    @staticmethod
+    def cache_stats() -> dict[str, Any]:
+        return {**_concept_cache.stats(), "in_flight": len(_inflight)}
 
     async def get_company_facts(self, cik: int) -> dict[str, Any]:
         cik10 = str(cik).zfill(10)
