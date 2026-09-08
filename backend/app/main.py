@@ -40,6 +40,7 @@ from .sec_client import (
 )
 from .segments import build_business_mix
 from .shareholder_returns import build_shareholder_returns
+from .snapshot import build_snapshot
 from .story import build_financial_story, build_story_sections
 
 app = FastAPI(title="FORGE Financial Intelligence", version="2.0.0")
@@ -332,6 +333,13 @@ async def _analyze_ticker(ticker_key: str, frequency: str = "annual") -> dict[st
         "historical_scores": historical_scores,
         "trend_story": trend_story,
         "timeline": timeline,
+        # The scannable overview. Derived entirely from the timeline and score
+        # history above, so it can never disagree with them and costs no
+        # additional SEC traffic.
+        "snapshot": build_snapshot(
+            timeline, historical_scores,
+            currency=reporting_currency(company_facts) or "USD",
+            peer_group=(classification or {}).get("peer_group")),
         "lease_summary": {
             "available": lease_available,
             "current_total": lease_current if lease_available else None,

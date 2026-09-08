@@ -114,10 +114,15 @@ def build_financial_timeline(company_facts: dict[str, Any], max_years: int = 10,
     frequency="quarterly" uses one point per individual fiscal quarter
     (10-Q duration facts only - cumulative YTD facts are excluded so a
     "quarterly" revenue series is genuinely single-quarter, not a mix)."""
-    revenue_tags = ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax",
-                     "RevenueFromContractWithCustomerIncludingAssessedTax", "SalesRevenueNet"]
-    net_income_tags = ["NetIncomeLoss", "ProfitLoss"]
-    gross_profit_tags = ["GrossProfit"]
+    # These come from normalize's canonical lists rather than being spelled
+    # out again here. The hand-written copies they replace held only the
+    # us-gaap spellings, so an IFRS filer's timeline lost revenue and net
+    # income entirely - the figures were retrieved and normalized correctly,
+    # then dropped at the last step because this module was asking for tags
+    # such filers never use.
+    revenue_tags = N.REVENUE_TAGS
+    net_income_tags = N.NET_INCOME_TAGS
+    gross_profit_tags = N.GROSS_PROFIT_TAGS
 
     series_fn = N.quarterly_series if frequency == "quarterly" else N.annual_series
     max_points = max_years * 4 if frequency == "quarterly" else max_years
