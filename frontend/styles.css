@@ -920,3 +920,127 @@ h3 { font-size: 1.05rem; }
   body { background: #fff; }
   .card, .chart-box { break-inside: avoid; box-shadow: none; }
 }
+
+/* ---------- Visual financial snapshot ----------
+   Six answers a reader can take in at a glance, sitting between the score
+   hero and the pillar grid. Deliberately quieter than either: hairline cells
+   rather than filled cards, so the score stays the loudest thing on the page
+   and the snapshot reads as instrumentation around it. */
+.snapshot {
+  margin-top: 26px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+.snapshot-title {
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 600;
+  margin: 0 0 14px;
+}
+.snapshot-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.snap-cell {
+  background: var(--card);
+  padding: 14px 15px 13px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.snap-label {
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 7px;
+}
+.snap-figure { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.snap-value {
+  font-family: var(--font-mono);
+  font-size: 1.32rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+/* Missing data is greyed and italic - never coloured like a failing measure. */
+.snap-na { color: var(--na); font-style: italic; font-size: 1.05rem; }
+.snap-chip {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  font-variant-numeric: tabular-nums;
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+.snap-good { color: var(--pass); background: var(--pass-bg); }
+.snap-bad { color: var(--fail); background: var(--fail-bg); }
+.snap-neutral { color: var(--muted); background: var(--na-bg); }
+
+.spark { width: 100%; height: 26px; margin: 10px 0 2px; display: block; }
+.spark path { stroke-width: 1.5px; }
+.spark circle { stroke: none; }
+.spark-good path { stroke: var(--pass); }
+.spark-good circle { fill: var(--pass); }
+.spark-bad path { stroke: var(--fail); }
+.spark-bad circle { fill: var(--fail); }
+.spark-neutral path { stroke: var(--muted); }
+.spark-neutral circle { fill: var(--muted); }
+
+.snap-nohistory {
+  font-size: 0.72rem;
+  color: var(--muted);
+  font-style: italic;
+  margin: 10px 0 2px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+}
+.snap-period {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  margin-bottom: 8px;
+}
+.snap-reading {
+  font-size: 0.79rem;
+  line-height: 1.45;
+  color: var(--muted);
+  margin: 0;
+}
+.snap-note {
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: var(--muted);
+  margin: 7px 0 0;
+  padding-top: 7px;
+  border-top: 1px dashed var(--border);
+}
+.snapshot-source {
+  font-size: 0.7rem;
+  color: var(--muted);
+  margin: 10px 0 0;
+}
+
+/* Mobile keeps two columns rather than one tall stack: these are small,
+   comparable figures, and a single column would push the last of them far
+   below anything a reader would scroll to. */
+@media (max-width: 620px) {
+  .snapshot-grid { grid-template-columns: repeat(2, 1fr); }
+  .snap-value { font-size: 1.12rem; }
+  .snap-cell { padding: 12px 11px; }
+  .snap-reading { font-size: 0.74rem; }
+}
+@media (max-width: 380px) {
+  .snapshot-grid { grid-template-columns: 1fr; }
+}
+@media print {
+  .snapshot-grid { break-inside: avoid; }
+}

@@ -400,6 +400,7 @@
             : ""}
         </div>
       </div>
+      ${snapshotHtml(data)}
       <div class="pillar-grid" style="margin-top:26px">${pillarHtml}</div>
       ${profileStripHtml(data)}
     `;
@@ -446,6 +447,75 @@
     // Safety net: if the tab is hidden mid-animation, or rAF is throttled for
     // any other reason, the correct figure is still what ends up displayed.
     setTimeout(() => { if (!done) settle(); }, dur + 400);
+  }
+
+  // ---------- Visual financial snapshot ----------
+  //
+  // Six questions a reader should be able to answer by looking rather than
+  // reading. The backend has already decided what is available and what each
+  // movement means; this renders that decision and never re-derives it, so
+  // the picture cannot drift from the figures elsewhere on the page.
+
+  // A sparkline is drawn as inline SVG rather than through the chart library:
+  // there are six of them above the fold, they carry no axes or interaction,
+  // and a bounded path costs nothing to draw or resize.
+  function sparkline(series, sentiment) {
+    if (!series || series.length < 3) return "";
+    const vals = series.map((p) => p.value);
+    const min = Math.min(...vals), max = Math.max(...vals);
+    const span = max - min;
+    const W = 100, H = 26, pad = 3;
+    // A genuinely flat series is drawn flat, in the middle - not stretched to
+    // fill the box, which would invent movement that is not there.
+    const y = (v) => (span === 0 ? H / 2 : pad + (H - pad * 2) * (1 - (v - min) / span));
+    const x = (i) => (vals.length === 1 ? W / 2 : (W * i) / (vals.length - 1));
+    const d = vals.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+    const cls = sentiment === "good" ? "spark-good" : sentiment === "bad" ? "spark-bad" : "spark-neutral";
+    const lastX = x(vals.length - 1).toFixed(1), lastY = y(vals[vals.length - 1]).toFixed(1);
+    return `<svg class="spark ${cls}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"
+              role="img" aria-hidden="true" focusable="false">
+        <path d="${d}" fill="none" vector-effect="non-scaling-stroke"/>
+        <circle cx="${lastX}" cy="${lastY}" r="2.2" vector-effect="non-scaling-stroke"/>
+      </svg>`;
+  }
+
+  function snapshotHtml(data) {
+    const snap = data.snapshot;
+    if (!snap || !Array.isArray(snap.metrics) || !snap.metrics.length) return "";
+    const arrow = (d) => (d === "up" ? "↑" : d === "down" ? "↓" : "→");
+
+    const cells = snap.metrics.map((m) => {
+      if (!m.available) {
+        return `<div class="snap-cell snap-cell-na">
+          <div class="snap-label">${esc(m.label)}</div>
+          <div class="snap-value snap-na" title="${esc(m.reason || "")}">Unavailable</div>
+          <div class="snap-reading">${esc(m.reason || "")}</div>
+        </div>`;
+      }
+      const chip = m.change_display
+        ? `<span class="snap-chip snap-${esc(m.sentiment)}">${arrow(m.direction)} ${esc(m.change_display)}</span>`
+        : "";
+      const trend = m.has_trend
+        ? sparkline(m.series, m.sentiment)
+        : `<p class="snap-nohistory">Insufficient history for a trend</p>`;
+      const period = m.series.length ? m.series[m.series.length - 1].label : "";
+      return `<div class="snap-cell">
+        <div class="snap-label">${esc(m.label)}</div>
+        <div class="snap-figure">
+          <span class="snap-value">${esc(m.display)}</span>${chip}
+        </div>
+        ${trend}
+        <div class="snap-period">${esc(period)}</div>
+        <p class="snap-reading">${esc(m.reading || "")}</p>
+        ${m.note ? `<p class="snap-note">${esc(m.note)}</p>` : ""}
+      </div>`;
+    }).join("");
+
+    return `<section class="snapshot" aria-label="Financial snapshot">
+      <h2 class="snapshot-title">Financial Snapshot</h2>
+      <div class="snapshot-grid">${cells}</div>
+      <p class="snapshot-source">${esc(snap.source || "")}</p>
+    </section>`;
   }
 
   function profileStripHtml(data) {
