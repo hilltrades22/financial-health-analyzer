@@ -222,3 +222,50 @@ def test_currency_is_carried_through_and_never_assumed_to_be_dollars():
     assert snap["currency"] == "TWD"
     assert "TWD" in _by_key(snap)["revenue"]["display"]
     assert "$" not in _by_key(snap)["revenue"]["display"]
+
+
+# --- The REIT shape ------------------------------------------------------
+#
+# Realty Income is the live example: it distributes its income rather than
+# retaining it, so it does not tag retained earnings at all, and it reports
+# almost no period under the debt spellings the rules query. Its analysis is
+# therefore full of legitimately unavailable measures. What must NOT happen is
+# the page treating that as a company in trouble, or as an empty page.
+
+REIT_LIKE = [
+    _row(2025, revenue=5300.0, net_income=860.0, equity=39000.0,
+         free_cash_flow=3100.0, operating_cash_flow=3300.0, net_margin_pct=16.2),
+    _row(2024, revenue=5000.0, net_income=860.0, equity=38000.0,
+         free_cash_flow=2900.0, operating_cash_flow=3100.0, net_margin_pct=17.2),
+    _row(2023, revenue=4080.0, net_income=872.0, equity=36000.0,
+         free_cash_flow=2400.0, operating_cash_flow=2600.0, net_margin_pct=21.4),
+]
+
+
+def test_a_filer_with_no_retained_earnings_still_gets_a_snapshot():
+    """No retained earnings means no historical score series, which must cost
+    that one metric and nothing else."""
+    snap = build_snapshot(REIT_LIKE, [])
+    m = _by_key(snap)
+    assert snap["available"] is True
+    assert m["revenue"]["available"] is True
+    assert m["cash_generation"]["available"] is True
+    assert m["health_trend"]["available"] is False
+
+
+def test_debt_reported_in_only_one_period_yields_no_leverage_reading():
+    """One data point is a figure, not a position. Reporting it as a trend -
+    or as zero leverage - would both be wrong."""
+    sparse_debt = [dict(r) for r in REIT_LIKE]
+    sparse_debt[2]["total_debt"] = 3975.0        # a single historical period
+    lev = _by_key(build_snapshot(sparse_debt))["leverage"]
+    assert lev["available"] is True               # the one real figure is shown
+    assert lev["has_trend"] is False              # but no trend is claimed
+    assert len(lev["series"]) == 1
+
+
+def test_no_debt_data_at_all_is_unavailable_rather_than_zero_leverage():
+    lev = _by_key(build_snapshot(REIT_LIKE))["leverage"]
+    assert lev["available"] is False
+    assert lev["value"] is None
+    assert lev["sentiment"] == "neutral"          # never coloured as a failure
