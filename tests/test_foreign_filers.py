@@ -172,3 +172,52 @@ def test_repeated_exchanges_are_listed_once():
     """Alphabet reports Nasdaq once per share class."""
     c = build_classification({"sic": "7372", "exchanges": ["Nasdaq", "Nasdaq", "Nasdaq", "Nasdaq"]})
     assert c["exchange"]["value"] == "Nasdaq"
+
+
+# --- Timeline coverage for IFRS filers -----------------------------------
+#
+# Regression: build_financial_timeline spelled out its own revenue and net
+# income tag lists instead of using normalize's canonical ones, and those
+# copies held only the us-gaap spellings. The figures were retrieved and
+# normalized correctly and then dropped at the very last step, so an IFRS
+# filer's timeline - and everything drawn from it - came back empty of the
+# two most important series on the page.
+
+def test_ifrs_filer_timeline_carries_revenue_and_net_income():
+    from backend.app.history import build_financial_timeline
+
+    rows = build_financial_timeline(IFRS_FACTS)
+    assert rows, "an IFRS filer must produce a timeline at all"
+    assert any(r.get("revenue") is not None for r in rows), \
+        "IFRS revenue (ifrs-full:Revenue) must reach the timeline"
+    assert any(r.get("net_income") is not None for r in rows), \
+        "IFRS net income (ifrs-full:ProfitLoss) must reach the timeline"
+
+    fy24 = next(r for r in rows if r.get("fiscal_year") == 2024)
+    assert fy24["revenue"] == 2.894e12          # TWD, as filed
+    assert fy24["net_income"] == 1.17e12
+
+
+def test_timeline_tag_lists_are_the_canonical_ones_not_local_copies():
+    """A second hand-written list is exactly how the IFRS spellings went
+    missing, so the module must keep using normalize's lists."""
+    import inspect
+    from backend.app import history as H
+
+    src = inspect.getsource(H.build_financial_timeline)
+    assert "revenue_tags = N.REVENUE_TAGS" in src
+    assert "net_income_tags = N.NET_INCOME_TAGS" in src
+    assert '"RevenueFromContractWithCustomerExcludingAssessedTax"' not in src, \
+        "revenue spellings must not be re-listed here"
+
+
+def test_ifrs_snapshot_is_built_in_the_filers_own_currency():
+    from backend.app.history import build_financial_timeline
+    from backend.app.snapshot import build_snapshot
+
+    rows = build_financial_timeline(IFRS_FACTS)
+    snap = build_snapshot(rows, [], currency="TWD")
+    revenue = next(m for m in snap["metrics"] if m["key"] == "revenue")
+    assert revenue["available"] is True
+    assert "TWD" in revenue["display"]
+    assert "$" not in revenue["display"]
