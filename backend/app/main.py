@@ -41,6 +41,7 @@ from .sec_client import (
 from .segments import build_business_mix
 from .dimensions import build_dimensions
 from .peers import build_peer_context
+from .periods import build_period_options
 from .shareholder_returns import build_shareholder_returns
 from .snapshot import build_snapshot
 from .story import build_financial_story, build_story_sections
@@ -188,9 +189,16 @@ async def _analyze_ticker(ticker_key: str, frequency: str = "annual") -> dict[st
             compute_piotroski_f_score(company_facts),
             build_historical_scores(company_facts),
             build_financial_timeline(company_facts, frequency=frequency),
+            # Both period views come out of the same pass over facts already
+            # in memory. The alternative - a second full analysis request just
+            # to redraw one chart - repeats the score, the rules, the story and
+            # the market lookup for a timeline we can build here for the cost
+            # of one more walk.
+            build_financial_timeline(company_facts, frequency="quarterly"),
         )
 
-    cf, score, quality_metrics, piotroski, historical_scores, timeline = await asyncio.to_thread(_cpu_analysis)
+    (cf, score, quality_metrics, piotroski, historical_scores, timeline,
+     timeline_quarterly) = await asyncio.to_thread(_cpu_analysis)
     trend_story = explain_score_trend(historical_scores)
 
     # Live market price is best-effort and clearly separated from SEC data.
@@ -342,6 +350,11 @@ async def _analyze_ticker(ticker_key: str, frequency: str = "annual") -> dict[st
         "historical_scores": historical_scores,
         "trend_story": trend_story,
         "timeline": timeline,
+        # The quarterly view, carried in the same response. The toggle then
+        # costs nothing and, more importantly, the page knows before the
+        # reader clicks whether there is anything to show.
+        "timeline_quarterly": timeline_quarterly,
+        "periods": build_period_options(timeline, timeline_quarterly),
         # The scannable overview. Derived entirely from the timeline and score
         # history above, so it can never disagree with them and costs no
         # additional SEC traffic.
