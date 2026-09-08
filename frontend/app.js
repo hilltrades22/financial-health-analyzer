@@ -401,6 +401,8 @@
         </div>
       </div>
       ${snapshotHtml(data)}
+      ${dimensionsHtml(data)}
+      ${peerContextHtml(data)}
       <div class="pillar-grid" style="margin-top:26px">${pillarHtml}</div>
       ${profileStripHtml(data)}
     `;
@@ -515,6 +517,111 @@
       <h2 class="snapshot-title">Financial Snapshot</h2>
       <div class="snapshot-grid">${cells}</div>
       <p class="snapshot-source">${esc(snap.source || "")}</p>
+    </section>`;
+  }
+
+  // ---------- Health dimensions (2D companion to the Financial Core) ----------
+  //
+  // The same scored rules the 3D model is built from, laid out flat so they
+  // can be read and compared rather than orbited. The backend has already
+  // aggregated them; this only presents the result.
+
+  function dimensionsHtml(data) {
+    const dims = data.dimensions;
+    if (!dims || !dims.available || !dims.dimensions.length) return "";
+    const arrow = (d) => (d === "up" ? "↑" : d === "down" ? "↓" : "→");
+
+    const rows = dims.dimensions.map((d) => {
+      const scored = d.scored && d.score !== null;
+      // A dimension that could not be scored shows no bar at all. A 0%-wide
+      // bar and a genuinely failing one look identical at a glance, and they
+      // mean opposite things.
+      const bar = scored
+        ? `<div class="dim-bar" role="img" aria-label="${d.score} out of 100">
+             <div class="dim-bar-fill status-fill-${esc(d.status)}" style="width:${d.score}%"></div>
+           </div>`
+        : `<div class="dim-bar dim-bar-empty" aria-hidden="true"></div>`;
+      const trend = d.direction
+        ? `<span class="dim-trend snap-${esc(d.direction_sentiment || "neutral")}">${arrow(d.direction)} ${esc(d.direction_label || "")}</span>`
+        : "";
+      const pm = d.primary_metric || {};
+      return `<div class="dim-row">
+        <div class="dim-head">
+          <span class="dim-name">${esc(d.name)}${d.sector_specific ? `<span class="dim-sector" title="Includes a measure specific to this company's peer group">SECTOR</span>` : ""}</span>
+          <span class="status-pill status-${esc(d.status)}">${esc(d.status === "NOT_APPLICABLE" ? "NOT APPLICABLE" : d.status)}</span>
+        </div>
+        <div class="dim-figure">
+          <span class="dim-score">${scored ? d.score : "—"}</span>
+          <span class="dim-outof">${scored ? "/ 100" : "not scored"}</span>
+          ${trend}
+        </div>
+        ${bar}
+        ${pm.name ? `<div class="dim-metric"><span class="dim-metric-name">${esc(pm.name)}</span><span class="dim-metric-value">${esc(String(pm.value ?? "—"))}</span></div>` : ""}
+        <p class="dim-interp">${esc(d.interpretation)}</p>
+      </div>`;
+    }).join("");
+
+    return `<section class="dimensions" aria-label="Financial health dimensions">
+      <h2 class="snapshot-title">Health Dimensions
+        <span class="dim-count">${dims.scored_count} of ${dims.total_count} scored</span></h2>
+      <div class="dim-grid">${rows}</div>
+      <p class="snapshot-source">${esc(dims.source || "")}</p>
+    </section>`;
+  }
+
+  // ---------- Peer context ----------
+  //
+  // There is no peer-data provider behind this analysis, so the only honest
+  // benchmark is the company's own record. The missing cross-company
+  // comparison is stated rather than quietly replaced by the self-comparison,
+  // which answers a different question.
+
+  function peerContextHtml(data) {
+    const pc = data.peer_context;
+    if (!pc) return "";
+    const avail = (pc.comparisons || []).filter((c) => c.available);
+
+    const bars = avail.map((c) => {
+      const pos = Math.max(0, Math.min(100, c.position_pct));
+      const tone = c.better_than_own_average === true ? "good"
+        : c.better_than_own_average === false ? "bad" : "neutral";
+      return `<div class="peer-row">
+        <div class="peer-head">
+          <span class="peer-label">${esc(c.label)}</span>
+          <span class="peer-current snap-${tone}">${esc(c.current_display)}</span>
+        </div>
+        <div class="peer-track" role="img"
+             aria-label="${esc(c.current_display)}, against an own-history range of ${esc(c.min_display)} to ${esc(c.max_display)}">
+          <div class="peer-avg" style="left:${Math.max(0, Math.min(100, ((c.average - c.min) / ((c.max - c.min) || 1)) * 100))}%"
+               title="Own ${c.periods}-period average: ${esc(c.average_display)}"></div>
+          <div class="peer-marker peer-${tone}" style="left:${pos}%"></div>
+        </div>
+        <div class="peer-scale">
+          <span>${esc(c.min_display)}</span>
+          <span class="peer-scale-mid">avg ${esc(c.average_display)}</span>
+          <span>${esc(c.max_display)}</span>
+        </div>
+        <p class="peer-reading">${esc(c.reading)}</p>
+      </div>`;
+    }).join("");
+
+    const unavailable = (pc.comparisons || []).filter((c) => !c.available);
+    const unavailHtml = unavailable.length
+      ? `<p class="peer-missing">${unavailable.map((c) => esc(c.label)).join(", ")}:
+           insufficient comparable history in SEC data.</p>`
+      : "";
+
+    return `<section class="peers" aria-label="Peer context">
+      <h2 class="snapshot-title">Position vs Its Own Record</h2>
+      ${avail.length
+        ? `<div class="peer-grid">${bars}</div>${unavailHtml}`
+        : `<p class="peer-missing">No measure has enough comparable history in SEC data to position the current figure.</p>`}
+      <div class="peer-benchmark">
+        <span class="status-pill status-UNAVAILABLE">BENCHMARK UNAVAILABLE</span>
+        <p>${esc(pc.peer_benchmark.reason)}</p>
+        ${pc.peer_group_label ? `<p class="peer-group-line">Classified for analysis as <strong>${esc(pc.peer_group_label)}</strong>. Sector-specific rules are applied, but no numeric sector average is computed.</p>` : ""}
+      </div>
+      <p class="snapshot-source">${esc(pc.source || "")}</p>
     </section>`;
   }
 

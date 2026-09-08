@@ -1044,3 +1044,102 @@ h3 { font-size: 1.05rem; }
 @media print {
   .snapshot-grid { break-inside: avoid; }
 }
+
+/* ---------- Health dimensions ----------
+   The flat companion to the Financial Core. Rows rather than cards: these are
+   meant to be compared down a column, and a grid of bordered tiles would make
+   nine dimensions shout as loudly as the score. */
+.dimensions, .peers { margin-top: 26px; padding-top: 18px; border-top: 1px solid var(--border); }
+.dim-count, .peer-count {
+  font-weight: 400; letter-spacing: 0.04em; text-transform: none;
+  color: var(--faint); margin-left: 8px; font-size: 0.72rem;
+}
+.dim-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1px; background: var(--border);
+  border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
+}
+.dim-row { background: var(--card); padding: 13px 15px 14px; min-width: 0; }
+.dim-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.dim-name {
+  font-size: 0.78rem; font-weight: 600; letter-spacing: 0.02em;
+  display: flex; align-items: center; gap: 6px; min-width: 0;
+}
+.dim-sector {
+  font-size: 0.56rem; letter-spacing: 0.09em; padding: 1px 4px;
+  border: 1px solid var(--border); border-radius: 3px; color: var(--faint);
+}
+.dim-figure { display: flex; align-items: baseline; gap: 6px; margin-bottom: 7px; flex-wrap: wrap; }
+.dim-score {
+  font-family: var(--font-mono); font-size: 1.28rem;
+  font-variant-numeric: tabular-nums; letter-spacing: -0.01em;
+}
+.dim-outof { font-size: 0.7rem; color: var(--faint); font-family: var(--font-mono); }
+.dim-trend { font-family: var(--font-mono); font-size: 0.7rem; padding: 1px 5px; border-radius: 3px; margin-left: auto; }
+.dim-bar { height: 4px; border-radius: 2px; background: var(--na-bg); overflow: hidden; }
+/* An unscored dimension gets a dashed rule, not an empty bar: a 0%-wide bar
+   and a failing one look identical, and they mean opposite things. */
+.dim-bar-empty { background: transparent; border-top: 1px dashed var(--border); height: 0; margin: 2px 0; }
+.dim-bar-fill { height: 100%; border-radius: 2px; }
+.status-fill-PASS { background: var(--pass); }
+.status-fill-WATCH { background: var(--watch); }
+.status-fill-FAIL { background: var(--fail); }
+.dim-metric {
+  display: flex; justify-content: space-between; gap: 8px;
+  margin-top: 9px; padding-top: 8px; border-top: 1px solid var(--hairline);
+  font-size: 0.72rem;
+}
+.dim-metric-name { color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dim-metric-value { font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.dim-interp { font-size: 0.76rem; line-height: 1.45; color: var(--muted); margin: 8px 0 0; }
+
+/* ---------- Peer context ----------
+   A marker on the company's own range. Not a gauge: the useful information is
+   one position against one span, and a dial would dress that up as more. */
+.peer-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px 26px;
+}
+.peer-row { min-width: 0; }
+.peer-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 9px; }
+.peer-label { font-size: 0.72rem; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); }
+.peer-current {
+  font-family: var(--font-mono); font-size: 0.95rem; font-variant-numeric: tabular-nums;
+  padding: 1px 6px; border-radius: 4px;
+}
+.peer-track {
+  position: relative; height: 6px; border-radius: 3px;
+  background: linear-gradient(90deg, var(--na-bg), var(--border));
+  border: 1px solid var(--hairline);
+}
+.peer-avg { position: absolute; top: -3px; bottom: -3px; width: 1px; background: var(--faint); }
+.peer-marker {
+  position: absolute; top: 50%; width: 10px; height: 10px; border-radius: 50%;
+  transform: translate(-50%, -50%); border: 2px solid var(--card);
+}
+.peer-good { background: var(--pass); }
+.peer-bad { background: var(--fail); }
+.peer-neutral { background: var(--muted); }
+.peer-scale {
+  display: flex; justify-content: space-between; gap: 6px; margin-top: 6px;
+  font-family: var(--font-mono); font-size: 0.62rem; color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+.peer-scale-mid { color: var(--muted); }
+.peer-reading { font-size: 0.75rem; line-height: 1.45; color: var(--muted); margin: 7px 0 0; }
+.peer-missing { font-size: 0.76rem; color: var(--muted); margin: 12px 0 0; }
+.peer-benchmark {
+  margin-top: 18px; padding: 13px 15px;
+  border: 1px dashed var(--border); border-radius: 8px;
+}
+.peer-benchmark p { font-size: 0.76rem; line-height: 1.5; color: var(--muted); margin: 9px 0 0; }
+.peer-group-line { border-top: 1px solid var(--hairline); padding-top: 9px; }
+
+@media (max-width: 620px) {
+  .dim-grid { grid-template-columns: 1fr; }
+  .peer-grid { grid-template-columns: 1fr; gap: 16px; }
+  .dim-interp, .peer-reading { font-size: 0.73rem; }
+}
+@media print {
+  .dim-row, .peer-row { break-inside: avoid; }
+}
