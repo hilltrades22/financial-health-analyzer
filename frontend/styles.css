@@ -1143,3 +1143,63 @@ h3 { font-size: 1.05rem; }
 @media print {
   .dim-row, .peer-row { break-inside: avoid; }
 }
+
+/* ---------- Investor & insider activity ----------
+   Real Form 4 and SEC dividend/buyback figures. Open-market buying and
+   selling face each other because their relative size is the whole point;
+   grants, option exercises and tax withholding sit apart, because folding
+   them into a "sold" total would invent a bearish reading out of ordinary
+   compensation mechanics. */
+.activity { margin-top: 26px; padding-top: 18px; border-top: 1px solid var(--border); }
+.act-block {
+  border: 1px solid var(--border); border-radius: 10px;
+  padding: 15px 16px 14px; margin-bottom: 14px; background: var(--card);
+}
+.act-title {
+  font-size: 0.86rem; font-weight: 600; margin: 0 0 13px;
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+}
+.act-sides { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.act-side { min-width: 0; }
+.act-side-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.act-side-label { font-size: 0.7rem; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); }
+.act-count { font-family: var(--font-mono); font-size: 0.66rem; color: var(--faint); }
+.act-value { font-family: var(--font-mono); font-size: 1.05rem; font-variant-numeric: tabular-nums; margin-bottom: 7px; }
+.act-buy { color: var(--pass); }
+.act-sell { color: var(--muted); }   /* selling is a fact, not a warning */
+.act-bar { height: 4px; border-radius: 2px; background: var(--na-bg); overflow: hidden; }
+.act-bar-empty { background: transparent; border-top: 1px dashed var(--border); height: 0; margin: 2px 0; }
+.act-bar-fill { height: 100%; border-radius: 2px; }
+.act-fill-buy { background: var(--pass); }
+.act-fill-sell { background: var(--muted); }
+.act-shares { font-family: var(--font-mono); font-size: 0.68rem; color: var(--faint); margin-top: 5px; }
+.act-other {
+  margin-top: 14px; padding-top: 11px; border-top: 1px dashed var(--border);
+  display: flex; gap: 18px; flex-wrap: wrap; align-items: baseline;
+}
+.act-other-row { display: flex; align-items: baseline; gap: 6px; font-size: 0.73rem; color: var(--muted); }
+.act-other-count { font-family: var(--font-mono); color: var(--text); }
+.act-other-note { font-size: 0.68rem; color: var(--faint); margin: 0; flex-basis: 100%; }
+.act-note { font-size: 0.74rem; line-height: 1.5; color: var(--muted); margin: 13px 0 0; }
+.act-unavailable { font-size: 0.78rem; line-height: 1.5; color: var(--muted); margin: 9px 0 0; }
+.act-role { display: block; font-size: 0.66rem; color: var(--faint); }
+.act-code { font-size: 0.74rem; border-bottom: 1px dotted var(--border); cursor: help; }
+.act-table { margin-top: 13px; }
+.act-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 16px; }
+.act-metric { min-width: 0; }
+.act-metric-value {
+  font-family: var(--font-mono); font-size: 1.05rem;
+  font-variant-numeric: tabular-nums; margin-top: 5px;
+}
+.act-metric-why { font-size: 0.7rem; color: var(--faint); margin-top: 4px; }
+/* Tables get their own scroll rather than pushing the page sideways. */
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.freq-unavailable { color: var(--muted); font-style: italic; }
+.tf-btn-off { opacity: 0.45; cursor: not-allowed; }
+
+@media (max-width: 620px) {
+  .act-sides { grid-template-columns: 1fr; gap: 15px; }
+  .act-block { padding: 13px 12px; }
+  .act-table { font-size: 0.78rem; }
+}
+@media print { .act-block { break-inside: avoid; } }

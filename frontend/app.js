@@ -63,7 +63,6 @@
 
   let currentData = null;
   let currentTicker = null;
-  let timelineCache = {}; // { annual: [...], quarterly: [...] } for currentTicker
   window.__forgeCharts = [];
 
   function showPanel(panel) {
@@ -120,7 +119,6 @@
       }
       currentData = body;
       currentTicker = ticker;
-      timelineCache = { annual: body.timeline, quarterly: null };
       render(body);
       showPanel(resultsPanel);
       window.scrollTo({ top: 0, behavior: "instant" });
@@ -403,6 +401,7 @@
       ${snapshotHtml(data)}
       ${dimensionsHtml(data)}
       ${peerContextHtml(data)}
+      ${activityHtml(data)}
       <div class="pillar-grid" style="margin-top:26px">${pillarHtml}</div>
       ${profileStripHtml(data)}
     `;
@@ -622,6 +621,125 @@
         ${pc.peer_group_label ? `<p class="peer-group-line">Classified for analysis as <strong>${esc(pc.peer_group_label)}</strong>. Sector-specific rules are applied, but no numeric sector average is computed.</p>` : ""}
       </div>
       <p class="snapshot-source">${esc(pc.source || "")}</p>
+    </section>`;
+  }
+
+  // ---------- Investor & insider activity ----------
+  //
+  // The backend already parses real Form 4 filings and real SEC dividend and
+  // buyback figures; until now neither reached the page. Everything below is
+  // rendered from those fields and nothing else.
+  //
+  // The one rule that governs the whole section: Form 4 categories are kept
+  // apart. A grant, an option exercise and shares withheld to pay tax on a
+  // vesting award are not open-market trades, and rolling them into a "sold"
+  // total would manufacture a bearish reading out of ordinary payroll
+  // mechanics. Only P and S codes are shown as buying and selling.
+
+  function insiderHtml(data) {
+    const ins = data.insider_activity;
+    if (!ins) return "";
+    if (!ins.available) {
+      return `<div class="act-block">
+        <h3 class="act-title">Insider Activity</h3>
+        <p class="act-unavailable">${esc(ins.reason || "Unavailable.")}</p>
+        <p class="snapshot-source">${esc(ins.source || "")}</p>
+      </div>`;
+    }
+    const s = ins.summary || {};
+    const buys = s.open_market_purchases || {}, sells = s.open_market_sales || {};
+    // Scale the two open-market bars against each other so their relative
+    // size is the message. With no value on either side there is nothing to
+    // scale and no bar is drawn.
+    const maxVal = Math.max(buys.value || 0, sells.value || 0);
+    const bar = (v, cls) => (maxVal > 0 && v
+      ? `<div class="act-bar"><div class="act-bar-fill ${cls}" style="width:${Math.round((v / maxVal) * 100)}%"></div></div>`
+      : `<div class="act-bar act-bar-empty"></div>`);
+    const side = (label, t, cls) => `<div class="act-side">
+      <div class="act-side-head"><span class="act-side-label">${esc(label)}</span>
+        <span class="act-count">${t.count || 0} ${(t.count === 1) ? "filing" : "filings"}</span></div>
+      <div class="act-value ${cls}">${t.value ? esc(fmtUsd(t.value)) : (t.count ? "Value not reported" : "None reported")}</div>
+      ${bar(t.value, cls === "act-buy" ? "act-fill-buy" : "act-fill-sell")}
+      <div class="act-shares">${t.shares ? esc(Number(t.shares).toLocaleString()) + " shares" : "&nbsp;"}</div>
+    </div>`;
+
+    // Non-open-market categories, listed separately and never summed with the
+    // two above.
+    const others = [
+      ["Grants / awards", s.grants], ["Option exercises", s.option_exercises],
+      ["Withheld for tax", s.tax_withholding],
+    ].filter(([, t]) => t && t.count);
+    const otherHtml = others.length
+      ? `<div class="act-other">${others.map(([l, t]) =>
+          `<div class="act-other-row"><span>${esc(l)}</span><span class="act-other-count">${t.count}</span></div>`).join("")}
+         <p class="act-other-note">Not open-market trades — counted separately.</p></div>`
+      : "";
+
+    const rows = (ins.transactions || []).slice(0, 12).map((t) => `<tr>
+      <td>${esc(t.transaction_date || "—")}</td>
+      <td>${esc(t.insider || "—")}${t.role ? `<span class="act-role">${esc(t.role)}</span>` : ""}</td>
+      <td><span class="act-code" title="${esc(t.type_note || "")}">${esc(t.type || t.code || "—")}</span></td>
+      <td class="num">${t.shares ? esc(Number(t.shares).toLocaleString()) : NA}</td>
+      <td class="num">${t.price_per_share ? esc(fmtUsd(t.price_per_share)) : NA}</td>
+      <td class="num">${t.value ? esc(fmtUsd(t.value)) : NA}</td>
+    </tr>`).join("");
+
+    return `<div class="act-block">
+      <h3 class="act-title">Insider Activity
+        <span class="dim-count">${ins.filings_examined || 0} Form 4 filings examined</span></h3>
+      <div class="act-sides">${side("Open-market purchases", buys, "act-buy")}${side("Open-market sales", sells, "act-sell")}</div>
+      ${otherHtml}
+      <p class="act-note">${esc(s.interpretation_note || "")}</p>
+      ${rows ? `<div class="table-scroll"><table class="data-table act-table">
+        <thead><tr><th>Date</th><th>Insider</th><th>Transaction</th><th class="num">Shares</th><th class="num">Price</th><th class="num">Value</th></tr></thead>
+        <tbody>${rows}</tbody></table></div>` : ""}
+      <p class="snapshot-source">${esc(ins.source || "")}</p>
+    </div>`;
+  }
+
+  function shareholderReturnsHtml(data) {
+    const sr = data.shareholder_returns;
+    if (!sr) return "";
+    const cell = (label, f) => {
+      const has = f && f.available !== false && (f.display || f.value !== null && f.value !== undefined);
+      return `<div class="act-metric">
+        <div class="snap-label">${esc(label)}</div>
+        <div class="act-metric-value${has ? "" : " snap-na"}">${has ? esc(f.display || String(f.value)) : "Unavailable"}</div>
+        ${!has && f && f.reason ? `<div class="act-metric-why">${esc(f.reason)}</div>` : ""}
+      </div>`;
+    };
+    const d = sr.dividend || {}, b = sr.buyback || {}, t = sr.total_returned_latest_year || {};
+    const anything = (d.display || b.display || t.display);
+    if (!anything) return "";
+    return `<div class="act-block">
+      <h3 class="act-title">Shareholder Returns</h3>
+      <div class="act-metrics">
+        ${cell("Dividends Paid", d)}
+        ${cell("Share Repurchases", b)}
+        ${cell("Total Returned", t)}
+      </div>
+      ${sr.note ? `<p class="act-note">${esc(sr.note)}</p>` : ""}
+    </div>`;
+  }
+
+  function ownershipHtml(data) {
+    const own = data.institutional_ownership;
+    if (!own || own.available) return "";   // nothing to invent, nothing to show
+    return `<div class="act-block">
+      <h3 class="act-title">Institutional Ownership</h3>
+      <span class="status-pill status-UNAVAILABLE">NO PROVIDER CONFIGURED</span>
+      <p class="act-unavailable">${esc(own.reason || "Unavailable.")}</p>
+      ${own.sec_note ? `<p class="act-note">${esc(own.sec_note)}</p>` : ""}
+    </div>`;
+  }
+
+  function activityHtml(data) {
+    const parts = [insiderHtml(data), shareholderReturnsHtml(data), ownershipHtml(data)]
+      .filter(Boolean).join("");
+    if (!parts) return "";
+    return `<section class="activity" aria-label="Investor and insider activity">
+      <h2 class="snapshot-title">Investor &amp; Insider Activity</h2>
+      ${parts}
     </section>`;
   }
 
@@ -1332,18 +1450,20 @@
     });
   }
 
-  async function fetchTimelineFrequency(freq) {
-    if (timelineCache[freq]) return timelineCache[freq];
-    if (!currentTicker) return [];
-    try {
-      const resp = await fetch(`/api/analyze/${encodeURIComponent(currentTicker)}?frequency=${freq}`);
-      const body = await safeJson(resp);
-      const tl = (resp.ok && body && body.timeline) || [];
-      timelineCache[freq] = tl;
-      return tl;
-    } catch (e) {
-      return [];
-    }
+  // Both period views arrive in the single analysis response, so switching is
+  // a local lookup rather than a second full analysis request. It also means
+  // availability is known before the reader clicks, which is what lets the
+  // quarterly control be disabled with a reason instead of silently drawing an
+  // empty chart - and an empty chart does not read as "no data", it reads as
+  // zeros.
+  function timelineForFrequency(data, freq) {
+    if (freq === "quarterly") return (data && data.timeline_quarterly) || [];
+    return (data && data.timeline) || [];
+  }
+
+  function periodOption(data, freq) {
+    const opts = ((data && data.periods) || {}).options || [];
+    return opts.find((o) => o.key === freq) || null;
   }
 
   function renderTimelineTab(data) {
@@ -1361,12 +1481,20 @@
         <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:8px">
           <div class="timeframe-controls" id="timeline-tf"></div>
           <div class="freq-toggle" id="timeline-freq">
-            <button class="tf-btn${timelineFrequency === "annual" ? " active" : ""}" data-freq="annual">Annual</button>
-            <button class="tf-btn${timelineFrequency === "quarterly" ? " active" : ""}" data-freq="quarterly">Quarterly</button>
+            ${(((data.periods || {}).options) || [{ key: "annual", label: "Annual", available: true }]).map((o) => `
+              <button class="tf-btn${timelineFrequency === o.key ? " active" : ""}${o.available ? "" : " tf-btn-off"}"
+                      data-freq="${esc(o.key)}" ${o.available ? "" : "disabled aria-disabled=\"true\""}
+                      title="${esc(o.available ? `${o.periods} periods, ${o.first_label} to ${o.last_label}` : (o.reason || ""))}">
+                ${esc(o.label)}</button>`).join("")}
           </div>
         </div>
         <div style="margin-bottom:10px">${toggles}</div>
-        <p class="chart-sub" id="timeline-loading" hidden>Loading quarterly data...</p>
+        ${(() => {
+          const q = periodOption(data, "quarterly");
+          return q && !q.available
+            ? `<p class="chart-sub freq-unavailable">Quarterly view unavailable — ${esc(q.reason)}</p>`
+            : "";
+        })()}
         <div class="chart-canvas-wrap"><canvas id="chart-timeline"></canvas></div>
       </div>
       <div class="chart-box">
@@ -1399,11 +1527,11 @@
     el.querySelectorAll('input[type="checkbox"][data-metric]').forEach((cb) => {
       cb.addEventListener("change", () => {
         if (cb.checked) timelineActive.add(cb.dataset.metric); else timelineActive.delete(cb.dataset.metric);
-        drawTimelineChart(getCurrentTimelineFilter(timelineCache[timelineFrequency] || data.timeline));
+        drawTimelineChart(getCurrentTimelineFilter(timelineForFrequency(data, timelineFrequency)));
       });
     });
 
-    function activeTimelineFull() { return timelineCache[timelineFrequency] || data.timeline; }
+    function activeTimelineFull() { return timelineForFrequency(data, timelineFrequency); }
 
     function drawSecondaryVisuals(tl) {
       drawRevEarnFcfChart(tl);
@@ -1417,15 +1545,18 @@
     drawDebtCompositionChart(data);
 
     el.querySelectorAll('#timeline-freq button[data-freq]').forEach((btn) => {
-      btn.addEventListener("click", async () => {
+      btn.addEventListener("click", () => {
         const freq = btn.dataset.freq;
-        if (freq === timelineFrequency) return;
+        if (freq === timelineFrequency || btn.disabled) return;
+        const opt = periodOption(data, freq);
+        // Belt and braces: the control is already disabled when a view has no
+        // usable history, but never redraw the charts from an empty series -
+        // a blank chart reads as reported zeros, not as absent data.
+        if (opt && !opt.available) return;
+        const tl = timelineForFrequency(data, freq);
+        if (!tl.length) return;
         el.querySelectorAll('#timeline-freq button').forEach((b) => b.classList.remove("active"));
         btn.classList.add("active");
-        const loadingEl = document.getElementById("timeline-loading");
-        if (freq === "quarterly" && !timelineCache.quarterly) { loadingEl.hidden = false; }
-        const tl = await fetchTimelineFrequency(freq);
-        loadingEl.hidden = true;
         timelineFrequency = freq;
         buildTimeframeButtons("timeline-tf", tl, (filtered) => { drawTimelineChart(filtered); drawSecondaryVisuals(filtered); });
         drawTimelineChart(filterTimeline(tl, "MAX"));
