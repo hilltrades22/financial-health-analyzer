@@ -39,6 +39,8 @@ from .sec_client import (
     SEC_USER_AGENT,
 )
 from .segments import build_business_mix
+from .dimensions import build_dimensions
+from .peers import build_peer_context
 from .shareholder_returns import build_shareholder_returns
 from .snapshot import build_snapshot
 from .story import build_financial_story, build_story_sections
@@ -278,6 +280,13 @@ async def _analyze_ticker(ticker_key: str, frequency: str = "annual") -> dict[st
         cf.quarterly.finance_lease_current, cf.quarterly.finance_lease_noncurrent,
     ))
 
+    # Built once and shared: the dimension overview borrows the snapshot's
+    # direction-of-travel rather than deriving it a second time.
+    _snapshot = build_snapshot(
+        timeline, historical_scores,
+        currency=reporting_currency(company_facts) or "USD",
+        peer_group=(classification or {}).get("peer_group"))
+
     result = {
         "ticker": cf.ticker,
         "cik": cf.cik,
@@ -336,10 +345,17 @@ async def _analyze_ticker(ticker_key: str, frequency: str = "annual") -> dict[st
         # The scannable overview. Derived entirely from the timeline and score
         # history above, so it can never disagree with them and costs no
         # additional SEC traffic.
-        "snapshot": build_snapshot(
-            timeline, historical_scores,
-            currency=reporting_currency(company_facts) or "USD",
-            peer_group=(classification or {}).get("peer_group")),
+        "snapshot": _snapshot,
+        # The flat companion to the 3D Financial Core, aggregated from the
+        # same scored rules so the two can never tell different stories.
+        "dimensions": build_dimensions(score, _snapshot),
+        # Position against this company's own reported history. A
+        # cross-company benchmark is reported as unavailable rather than
+        # invented - there is no peer-data provider behind this analysis.
+        "peer_context": build_peer_context(
+            timeline,
+            peer_group_label=(classification or {}).get("peer_group_label"),
+            peer_group_note=(classification or {}).get("peer_group_note")),
         "lease_summary": {
             "available": lease_available,
             "current_total": lease_current if lease_available else None,
